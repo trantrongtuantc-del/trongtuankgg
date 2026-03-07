@@ -1,1 +1,1 @@
-worker: python wave_signal_bot.py
+worker: python crypto_ema20_100_bot.py
