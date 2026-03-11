@@ -1,6 +1,6 @@
 """
-Telegram Bot - Crypto EMA20/100 Daily Scanner
-Tìm kiếm token crypto có EMA20 cắt EMA100 trên nến ngày (Golden/Death Cross)
+Telegram Bot - Crypto EMA20/50 Daily Scanner
+Tìm kiếm token crypto có EMA20 cắt EMA50 trên nến ngày (Golden/Death Cross)
 
 Cài đặt:
     pip install python-telegram-bot requests pandas numpy
@@ -8,7 +8,7 @@ Cài đặt:
 Sử dụng:
     1. Tạo bot mới qua @BotFather trên Telegram
     2. Lấy TOKEN và điền vào BOT_TOKEN bên dưới
-    3. Chạy: python crypto_ema20_100_bot.py
+    3. Chạy: python crypto_ema20_50_bot.py
 """
 
 import logging
@@ -26,11 +26,11 @@ from telegram.ext import (
 # ============================================================
 # CẤU HÌNH - Thay đổi ở đây
 # ============================================================
-BOT_TOKEN = "8694665621:AAEecu6KL49c2h0W49cVTvH9Hl2Ew6f_qjgAM_BOT_TOKEN"   # Token từ @BotFather
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"   # Token từ @BotFather
 
 # Cài đặt scanner
 EMA_FAST = 20                            # Chu kỳ EMA nhanh
-EMA_SLOW = 100                           # Chu kỳ EMA chậm
+EMA_SLOW = 50                            # Chu kỳ EMA chậm
 EMA_PERIOD = EMA_SLOW                   # Dùng EMA chậm làm mốc tham chiếu chính
 TIMEFRAME = "1d"                         # Khung thời gian (nến ngày)
 PROXIMITY_PERCENT = 2.0                  # % cách EMA để coi là "gần EMA" (±2%)
@@ -117,7 +117,7 @@ def calculate_ema(series: pd.Series, period: int) -> pd.Series:
 
 def detect_ema_crossover(ema_fast: pd.Series, ema_slow: pd.Series, lookback: int = 3) -> str:
     """
-    Phát hiện EMA20 cắt EMA100 trong `lookback` nến gần nhất (nến ngày).
+    Phát hiện EMA20 cắt EMA50 trong `lookback` nến gần nhất (nến ngày).
     Trả về: "golden_cross" | "death_cross" | "none"
     """
     # Cần ít nhất lookback+1 nến để so sánh
@@ -129,9 +129,9 @@ def detect_ema_crossover(ema_fast: pd.Series, ema_slow: pd.Series, lookback: int
         prev_above = ema_fast.iloc[i - 1] > ema_slow.iloc[i - 1]
         curr_above = ema_fast.iloc[i] > ema_slow.iloc[i]
         if not prev_above and curr_above:
-            return "golden_cross"   # EMA20 cắt lên EMA100
+            return "golden_cross"   # EMA20 cắt lên EMA50
         if prev_above and not curr_above:
-            return "death_cross"    # EMA20 cắt xuống EMA100
+            return "death_cross"    # EMA20 cắt xuống EMA50
 
     return "none"
 
@@ -139,9 +139,9 @@ def detect_ema_crossover(ema_fast: pd.Series, ema_slow: pd.Series, lookback: int
 def analyze_symbol(symbol: str) -> dict | None:
     """
     Phân tích một symbol:
-    - Tính EMA20 & EMA100
-    - Kiểm tra giá hiện tại so với EMA100
-    - Phát hiện EMA20 cắt EMA100 (Golden/Death Cross) trên nến ngày
+    - Tính EMA20 & EMA50
+    - Kiểm tra giá hiện tại so với EMA50
+    - Phát hiện EMA20 cắt EMA50 (Golden/Death Cross) trên nến ngày
     - Trả về dict kết quả hoặc None nếu không đủ điều kiện
     """
     df = get_klines(symbol)
@@ -149,49 +149,49 @@ def analyze_symbol(symbol: str) -> dict | None:
         return None
 
     df["ema20"]  = calculate_ema(df["close"], EMA_FAST)
-    df["ema100"] = calculate_ema(df["close"], EMA_SLOW)
+    df["ema50"] = calculate_ema(df["close"], EMA_SLOW)
 
     current_price = df["close"].iloc[-1]
     ema20  = df["ema20"].iloc[-1]
-    ema100 = df["ema100"].iloc[-1]
+    ema50 = df["ema50"].iloc[-1]
 
-    if ema100 == 0:
+    if ema50 == 0:
         return None
 
-    pct_diff = ((current_price - ema100) / ema100) * 100  # + = trên EMA, - = dưới EMA
+    pct_diff = ((current_price - ema50) / ema50) * 100  # + = trên EMA, - = dưới EMA
 
-    # Xác định trạng thái so với EMA100
+    # Xác định trạng thái so với EMA50
     if abs(pct_diff) <= PROXIMITY_PERCENT:
-        status = "🎯 GẦN EMA100"
+        status = "🎯 GẦN EMA50"
         signal = "near"
     elif pct_diff > 0:
-        status = "📈 TRÊN EMA100"
+        status = "📈 TRÊN EMA50"
         signal = "above"
     else:
-        status = "📉 DƯỚI EMA100"
+        status = "📉 DƯỚI EMA50"
         signal = "below"
 
-    # Kiểm tra nến hiện tại có bounce từ EMA100 không
+    # Kiểm tra nến hiện tại có bounce từ EMA50 không
     prev_low = df["low"].iloc[-1]
-    bounce = (prev_low <= ema100 * 1.005) and (current_price > ema100)
+    bounce = (prev_low <= ema50 * 1.005) and (current_price > ema50)
 
-    # Phát hiện Golden Cross / Death Cross EMA20/100 trên nến ngày (trong 3 nến gần nhất)
-    crossover = detect_ema_crossover(df["ema20"], df["ema100"], lookback=3)
+    # Phát hiện Golden Cross / Death Cross EMA20/50 trên nến ngày (trong 3 nến gần nhất)
+    crossover = detect_ema_crossover(df["ema20"], df["ema50"], lookback=3)
 
-    # Vị trí hiện tại của EMA20 so với EMA100
-    ema20_above_100 = ema20 > ema100
+    # Vị trí hiện tại của EMA20 so với EMA50
+    ema20_above_50 = ema20 > ema50
 
     return {
         "symbol":          symbol,
         "price":           current_price,
         "ema20":           ema20,
-        "ema100":          ema100,
+        "ema50":          ema50,
         "pct_diff":        pct_diff,
         "status":          status,
         "signal":          signal,
         "bounce":          bounce,
         "crossover":       crossover,        # "golden_cross" | "death_cross" | "none"
-        "ema20_above_100": ema20_above_100,
+        "ema20_above_50": ema20_above_50,
     }
 
 
@@ -246,16 +246,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh /start"""
     keyboard = [
         [
-            InlineKeyboardButton("🎯 Gần EMA100", callback_data="scan_near"),
-            InlineKeyboardButton("📈 Trên EMA100", callback_data="scan_above"),
+            InlineKeyboardButton("🎯 Gần EMA50", callback_data="scan_near"),
+            InlineKeyboardButton("📈 Trên EMA50", callback_data="scan_above"),
         ],
         [
-            InlineKeyboardButton("📉 Dưới EMA100", callback_data="scan_below"),
-            InlineKeyboardButton("🔄 Bounce EMA100", callback_data="scan_bounce"),
+            InlineKeyboardButton("📉 Dưới EMA50", callback_data="scan_below"),
+            InlineKeyboardButton("🔄 Bounce EMA50", callback_data="scan_bounce"),
         ],
         [
-            InlineKeyboardButton("⭐ Golden Cross (EMA20>100)", callback_data="scan_golden"),
-            InlineKeyboardButton("💀 Death Cross (EMA20<100)", callback_data="scan_death"),
+            InlineKeyboardButton("⭐ Golden Cross (EMA20>50)", callback_data="scan_golden"),
+            InlineKeyboardButton("💀 Death Cross (EMA20<50)", callback_data="scan_death"),
         ],
         [
             InlineKeyboardButton("📊 Kiểm tra 1 Token", callback_data="check_single"),
@@ -264,7 +264,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     msg = (
-        "🤖 *CRYPTO EMA20/100 SCANNER*\n"
+        "🤖 *CRYPTO EMA20/50 SCANNER*\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Timeframe: *Daily (1D)*\n"
         f"〽️ EMA Fast: *{EMA_FAST}* | EMA Slow: *{EMA_SLOW}*\n"
@@ -272,12 +272,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💹 Volume tối thiểu: *${MIN_VOLUME_USDT:,.0f}*\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "Chọn loại scan bên dưới:\n\n"
-        "🎯 *Gần EMA100* – Token đang sát EMA100\n"
-        "📈 *Trên EMA100* – Token đang trên EMA100\n"
-        "📉 *Dưới EMA100* – Token đang dưới EMA100\n"
-        "🔄 *Bounce EMA100* – Nến chạm & bật EMA100\n"
-        "⭐ *Golden Cross* – EMA20 vừa cắt lên EMA100 (3 nến gần nhất)\n"
-        "💀 *Death Cross* – EMA20 vừa cắt xuống EMA100 (3 nến gần nhất)\n"
+        "🎯 *Gần EMA50* – Token đang sát EMA50\n"
+        "📈 *Trên EMA50* – Token đang trên EMA50\n"
+        "📉 *Dưới EMA50* – Token đang dưới EMA50\n"
+        "🔄 *Bounce EMA50* – Nến chạm & bật EMA50\n"
+        "⭐ *Golden Cross* – EMA20 vừa cắt lên EMA50 (3 nến gần nhất)\n"
+        "💀 *Death Cross* – EMA20 vừa cắt xuống EMA50 (3 nến gần nhất)\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
 
@@ -288,17 +288,17 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *HƯỚNG DẪN SỬ DỤNG*\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "*/start* – Mở menu chính\n"
-        "*/scan\\_near* – Token gần EMA100 (±2%)\n"
-        "*/scan\\_above* – Token đang trên EMA100\n"
-        "*/scan\\_below* – Token đang dưới EMA100\n"
-        "*/scan\\_bounce* – Token vừa bounce EMA100\n"
-        "*/scan\\_golden* – Golden Cross EMA20 cắt lên EMA100\n"
-        "*/scan\\_death* – Death Cross EMA20 cắt xuống EMA100\n"
+        "*/scan\\_near* – Token gần EMA50 (±2%)\n"
+        "*/scan\\_above* – Token đang trên EMA50\n"
+        "*/scan\\_below* – Token đang dưới EMA50\n"
+        "*/scan\\_bounce* – Token vừa bounce EMA50\n"
+        "*/scan\\_golden* – Golden Cross EMA20 cắt lên EMA50\n"
+        "*/scan\\_death* – Death Cross EMA20 cắt xuống EMA50\n"
         "*/check <SYMBOL>* – Kiểm tra 1 token\n"
         "   Ví dụ: `/check BTCUSDT`\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 *Golden Cross* (EMA20 cắt lên EMA100) thường báo hiệu xu hướng tăng.\n"
-        "💡 *Death Cross* (EMA20 cắt xuống EMA100) thường báo hiệu xu hướng giảm.\n"
+        "💡 *Golden Cross* (EMA20 cắt lên EMA50) thường báo hiệu xu hướng tăng.\n"
+        "💡 *Death Cross* (EMA20 cắt xuống EMA50) thường báo hiệu xu hướng giảm.\n"
         "📌 Bot scan trong *3 nến ngày gần nhất*.\n\n"
         "⚠️ *Lưu ý:* Đây chỉ là công cụ hỗ trợ phân tích,\n"
         "không phải tư vấn đầu tư."
@@ -309,12 +309,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def format_results(results: list[dict], mode: str, limit: int = 30) -> str:
     """Format kết quả scan thành text"""
     mode_labels = {
-        "near":         "🎯 TOKEN GẦN EMA100 (±2%)",
-        "above":        "📈 TOKEN TRÊN EMA100",
-        "below":        "📉 TOKEN DƯỚI EMA100",
-        "bounce":       "🔄 TOKEN BOUNCE EMA100",
-        "golden_cross": "⭐ GOLDEN CROSS – EMA20 cắt lên EMA100 (3 nến D gần nhất)",
-        "death_cross":  "💀 DEATH CROSS – EMA20 cắt xuống EMA100 (3 nến D gần nhất)",
+        "near":         "🎯 TOKEN GẦN EMA50 (±2%)",
+        "above":        "📈 TOKEN TRÊN EMA50",
+        "below":        "📉 TOKEN DƯỚI EMA50",
+        "bounce":       "🔄 TOKEN BOUNCE EMA50",
+        "golden_cross": "⭐ GOLDEN CROSS – EMA20 cắt lên EMA50 (3 nến D gần nhất)",
+        "death_cross":  "💀 DEATH CROSS – EMA20 cắt xuống EMA50 (3 nến D gần nhất)",
     }
     label = mode_labels.get(mode, "📊 KẾT QUẢ SCAN")
 
@@ -332,11 +332,11 @@ async def format_results(results: list[dict], mode: str, limit: int = 30) -> str
     for r in shown:
         sym = r["symbol"].replace("USDT", "")
         price = r["price"]
-        ema  = r["ema100"]
+        ema  = r["ema50"]
         pct  = r["pct_diff"]
         bounce_tag = " 🔄" if r["bounce"] else ""
 
-        # Tag giao cắt EMA20/100
+        # Tag giao cắt EMA20/50
         if r.get("crossover") == "golden_cross":
             cross_tag = " ⭐GC"
         elif r.get("crossover") == "death_cross":
@@ -344,14 +344,14 @@ async def format_results(results: list[dict], mode: str, limit: int = 30) -> str
         else:
             cross_tag = ""
 
-        # Vị trí EMA20 so EMA100
-        ema20_tag = "EMA20>100" if r.get("ema20_above_100") else "EMA20<100"
+        # Vị trí EMA20 so EMA50
+        ema20_tag = "EMA20>50" if r.get("ema20_above_50") else "EMA20<50"
         ema20_val = r.get("ema20", 0)
 
         sign = "+" if pct >= 0 else ""
         lines.append(
             f"*{sym}*{bounce_tag}{cross_tag}  `{sign}{pct:.2f}%`\n"
-            f"   💰 ${price:,.4f}  |  📐 EMA100 ${ema:,.4f}\n"
+            f"   💰 ${price:,.4f}  |  📐 EMA50 ${ema:,.4f}\n"
             f"   〽️ EMA20 ${ema20_val:,.4f}  ({ema20_tag})"
         )
 
@@ -418,45 +418,45 @@ async def check_single_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     pct = res["pct_diff"]
     sign = "+" if pct >= 0 else ""
-    bounce_text = "\n🔄 *Tín hiệu Bounce EMA100!*" if res["bounce"] else ""
+    bounce_text = "\n🔄 *Tín hiệu Bounce EMA50!*" if res["bounce"] else ""
 
     # Crossover tag
     crossover = res.get("crossover", "none")
     if crossover == "golden_cross":
-        cross_text = "\n⭐ *GOLDEN CROSS!* EMA20 vừa cắt lên EMA100 (3 nến D gần nhất)"
+        cross_text = "\n⭐ *GOLDEN CROSS!* EMA20 vừa cắt lên EMA50 (3 nến D gần nhất)"
     elif crossover == "death_cross":
-        cross_text = "\n💀 *DEATH CROSS!* EMA20 vừa cắt xuống EMA100 (3 nến D gần nhất)"
+        cross_text = "\n💀 *DEATH CROSS!* EMA20 vừa cắt xuống EMA50 (3 nến D gần nhất)"
     else:
         cross_text = ""
 
     ema20_val = res.get("ema20", 0)
-    ema20_tag = "EMA20 trên EMA100 ✅" if res.get("ema20_above_100") else "EMA20 dưới EMA100 ⚠️"
+    ema20_tag = "EMA20 trên EMA50 ✅" if res.get("ema20_above_50") else "EMA20 dưới EMA50 ⚠️"
 
     # Phân tích thêm
     if abs(pct) <= 1:
-        analysis = "⚡ Giá đang sát EMA100, vùng quan trọng cần theo dõi!"
+        analysis = "⚡ Giá đang sát EMA50, vùng quan trọng cần theo dõi!"
     elif pct > 0:
         if pct < 5:
-            analysis = "📈 Giá vừa vượt EMA100, xu hướng tăng."
+            analysis = "📈 Giá vừa vượt EMA50, xu hướng tăng."
         elif pct < 20:
-            analysis = "📈 Giá đang trên EMA100, xu hướng tăng trung hạn."
+            analysis = "📈 Giá đang trên EMA50, xu hướng tăng trung hạn."
         else:
-            analysis = "⚠️ Giá đang xa EMA100, có thể điều chỉnh."
+            analysis = "⚠️ Giá đang xa EMA50, có thể điều chỉnh."
     else:
         if abs(pct) < 5:
-            analysis = "📉 Giá vừa phá EMA100, cần thận trọng."
+            analysis = "📉 Giá vừa phá EMA50, cần thận trọng."
         else:
-            analysis = "📉 Giá đang dưới EMA100, xu hướng giảm."
+            analysis = "📉 Giá đang dưới EMA50, xu hướng giảm."
 
     text = (
         f"📊 *{res['symbol']}* – Phân tích EMA Daily\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 Giá hiện tại:  `${res['price']:,.6f}`\n"
         f"〽️ EMA20:         `${ema20_val:,.6f}`\n"
-        f"📐 EMA100:        `${res['ema100']:,.6f}`\n"
-        f"📏 Khoảng cách:  `{sign}{pct:.2f}%` so EMA100\n"
+        f"📐 EMA50:        `${res['ema50']:,.6f}`\n"
+        f"📏 Khoảng cách:  `{sign}{pct:.2f}%` so EMA50\n"
         f"📌 Trạng thái:   {res['status']}\n"
-        f"🔀 EMA20/100:    {ema20_tag}"
+        f"🔀 EMA20/50:    {ema20_tag}"
         f"{cross_text}"
         f"{bounce_text}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -501,108 +501,4 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif data.startswith("refresh_"):
         symbol = data.replace("refresh_", "")
-        await query.answer("🔄 Đang cập nhật...")
-        # Tạo context.args giả để dùng lại hàm check
-        context.args = [symbol]
-        await check_single_symbol(update, context)
-
-
-async def start_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Hiện lại menu từ callback"""
-    query = update.callback_query
-    await query.answer()
-
-    keyboard = [
-        [
-            InlineKeyboardButton("🎯 Gần EMA100", callback_data="scan_near"),
-            InlineKeyboardButton("📈 Trên EMA100", callback_data="scan_above"),
-        ],
-        [
-            InlineKeyboardButton("📉 Dưới EMA100", callback_data="scan_below"),
-            InlineKeyboardButton("🔄 Bounce EMA100", callback_data="scan_bounce"),
-        ],
-        [
-            InlineKeyboardButton("⭐ Golden Cross (EMA20>100)", callback_data="scan_golden"),
-            InlineKeyboardButton("💀 Death Cross (EMA20<100)", callback_data="scan_death"),
-        ],
-        [
-            InlineKeyboardButton("📊 Kiểm tra 1 Token", callback_data="check_single"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    msg = (
-        "🤖 *CRYPTO EMA20/100 SCANNER*\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Timeframe: *Daily (1D)*\n"
-        f"〽️ EMA Fast: *{EMA_FAST}* | EMA Slow: *{EMA_SLOW}*\n"
-        f"🎯 Ngưỡng gần EMA: *±{PROXIMITY_PERCENT}%*\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        "Chọn loại scan:\n\n"
-        "🎯 *Gần EMA100* – Token đang sát EMA100\n"
-        "📈 *Trên EMA100* – Token đang trên EMA100\n"
-        "📉 *Dưới EMA100* – Token đang dưới EMA100\n"
-        "🔄 *Bounce EMA100* – Nến chạm & bật EMA100\n"
-        "⭐ *Golden Cross* – EMA20 vừa cắt lên EMA100\n"
-        "💀 *Death Cross* – EMA20 vừa cắt xuống EMA100\n"
-    )
-    await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
-
-
-# Shortcut commands
-async def scan_near_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await do_scan(update, context, "near")
-
-async def scan_above_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await do_scan(update, context, "above")
-
-async def scan_below_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await do_scan(update, context, "below")
-
-async def scan_bounce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await do_scan(update, context, "bounce")
-
-async def scan_golden_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await do_scan(update, context, "golden_cross")
-
-async def scan_death_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await do_scan(update, context, "death_cross")
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-    if BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        print("❌ LỖI: Chưa điền BOT_TOKEN!")
-        print("   Mở file này và thay YOUR_TELEGRAM_BOT_TOKEN bằng token từ @BotFather")
-        return
-
-    print("🤖 Crypto EMA20/100 Bot đang khởi động...")
-    print(f"   EMA Fast   : {EMA_FAST}")
-    print(f"   EMA Slow   : {EMA_SLOW}")
-    print(f"   Timeframe  : Daily (1D)")
-    print(f"   Proximity  : ±{PROXIMITY_PERCENT}%")
-    print(f"   Min Volume : ${MIN_VOLUME_USDT:,.0f}")
-
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    # Đăng ký handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("check", check_single_symbol))
-    app.add_handler(CommandHandler("scan_near", scan_near_cmd))
-    app.add_handler(CommandHandler("scan_above", scan_above_cmd))
-    app.add_handler(CommandHandler("scan_below", scan_below_cmd))
-    app.add_handler(CommandHandler("scan_bounce", scan_bounce_cmd))
-    app.add_handler(CommandHandler("scan_golden", scan_golden_cmd))
-    app.add_handler(CommandHandler("scan_death", scan_death_cmd))
-    app.add_handler(CallbackQueryHandler(button_handler))
-
-    print("✅ Bot đang chạy... Nhấn Ctrl+C để dừng")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
+        await query
