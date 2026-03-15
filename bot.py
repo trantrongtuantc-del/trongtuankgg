@@ -42,9 +42,15 @@ except ImportError:
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
-from telegram import Bot
+from telegram import Bot, Update
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter, TelegramError
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    filters,
+)
 
 # ─── Logging → stdout (Railway Logs tab) ─────────────────────────
 logging.basicConfig(
@@ -714,11 +720,13 @@ def format_summary(
 
 class CryptoScanner:
     def __init__(self):
-        self.az   = SignalAnalyzer()
-        self.exch = None
-        self.bot  = Bot(token=CFG.BOT_TOKEN)
+        self.az      = SignalAnalyzer()
+        self.exch    = None
+        self.bot     = Bot(token=CFG.BOT_TOKEN)
+        self.app     = None          # telegram.ext.Application
         self.last: dict[str, float] = {}
-        self._stop = False
+        self._stop   = False
+        self._scanning = False       # mutex: tránh 2 scan chạy cùng lúc
 
     def _on_signal(self, *_):
         log.info("Nhận SIGTERM/SIGINT — dừng sau scan hiện tại...")
@@ -881,7 +889,7 @@ class CryptoScanner:
 
         return None
 
-    async def scan(self):
+    async def _do_scan(self):
         if not self.in_session():
             log.info("Ngoài giờ London/NY — skip")
             return
@@ -959,6 +967,251 @@ class CryptoScanner:
                 f"_Chưa có tín hiệu đủ điều kiện_"
             )
 
+    # ══════════════════════════════════════════════════════════════
+    # COMMAND HANDLERS
+    # ══════════════════════════════════════════════════════════════
+
+    async def _check_auth(self, update: Update) -> bool:
+        """Chỉ cho phép CHAT_ID đã cấu hình dùng lệnh"""
+        cid = str(update.effective_chat.id)
+        if cid != str(CFG.CHAT_ID).lstrip("-"):
+            # Cũng chấp nhận group ID có thể có dấu -
+            if cid != CFG.CHAT_ID.lstrip("-") and str(update.effective_chat.id) != CFG.CHAT_ID:
+                log.warning(f"Unauthorized command from chat_id={update.effective_chat.id}")
+                return False
+        return True
+
+    async def cmd_scan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/scan — Quét thị trường ngay lập tức"""
+        if not await self._check_auth(update):
+            return
+        if self._scanning:
+            await update.message.reply_text(
+                "⏳ Đang quét rồi, vui lòng chờ...",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+        await update.message.reply_text(
+            "🔍 *Bắt đầu quét thị trường...*\n"
+            f"📊 Khung: `{CFG.TF_PRIMARY.upper()}` | Top `{CFG.MAX_COINS}` coins",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        log.info(f"Manual /scan triggered by {update.effective_user.username or update.effective_chat.id}")
+        await self.scan()
+
+    async def cmd_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/status — Xem trạng thái bot"""
+        if not await self._check_auth(update):
+            return
+        now   = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+        nsig  = len(self.last)
+        insess = "✅ Trong giờ" if self.in_session() else "❌ Ngoài giờ"
+        await update.message.reply_text(
+            f"🤖 *Bot Status*\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"🕐 `{now}`\n"
+            f"📡 Exchange: `{CFG.EXCHANGE}`\n"
+            f"⏱ Khung: `{CFG.TF_PRIMARY.upper()}`\n"
+            f"🔄 Scan interval: `{CFG.SCAN_INTERVAL}s`\n"
+            f"🏃 Đang quét: `{'Có' if self._scanning else 'Không'}`\n"
+            f"🕐 Session: `{insess}`\n"
+            f"📬 Tín hiệu đã gửi phiên này: `{nsig} coins`\n"
+            f"🎯 CTO≥`±{CFG.CTO_ENTRY_THRESHOLD}` | Conf≥`{CFG.CONFLUENCE_MIN}/6`\n"
+            f"🎲 Prob<`{int(CFG.PROB_MAX_ENTRY*100)}%` | V8≥`{CFG.MASTER_MIN}/10`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    async def cmd_setcoin(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/coin BTC — Phân tích nhanh 1 coin cụ thể"""
+        if not await self._check_auth(update):
+            return
+        args = ctx.args
+        if not args:
+            await update.message.reply_text(
+                "❌ Dùng: `/coin BTC` hoặc `/coin ETH`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        symbol_input = args[0].upper().strip()
+        # Thử các định dạng symbol khác nhau
+        candidates = [
+            f"{symbol_input}/USDT:USDT",
+            f"{symbol_input}USDT",
+            f"{symbol_input}/USDT",
+        ]
+
+        await update.message.reply_text(
+            f"🔍 Đang phân tích `{symbol_input}`...",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+        found = False
+        for sym in candidates:
+            try:
+                df_m, df_h = await asyncio.gather(
+                    self.fetch(sym, CFG.TF_PRIMARY),
+                    self.fetch(sym, CFG.TF_HTF, limit=100),
+                )
+                if df_m is None:
+                    continue
+
+                sig = self.az.analyze(df_m, df_h)
+                if not sig["valid"]:
+                    continue
+
+                found = True
+                direction = "LONG" if sig["cto_score"] > 0 else "SHORT"
+                is_long   = sig["cto_score"] > 0
+                conf      = sig["bull_conf"] if is_long else sig["bear_conf"]
+                master    = sig["mbuy"] if is_long else sig["msell"]
+                px        = sig["price"]
+
+                def fp(x):
+                    if x >= 1000: return f"{x:,.2f}"
+                    if x >= 1:    return f"{x:.4f}"
+                    return f"{x:.6f}"
+
+                has_sig = (sig["final_long"] or sig["final_short"] or
+                           (sig["lenh_tong_buy"] and sig["cto_long"]) or
+                           (sig["lenh_tong_sell"] and sig["cto_short"]))
+                sig_tag = "✅ *CÓ TÍN HIỆU*" if has_sig else "⏳ *Chưa đủ điều kiện*"
+
+                msg = (
+                    f"📊 *Phân tích {symbol_input}/USDT* — `{CFG.TF_PRIMARY.upper()}`\n"
+                    f"━━━━━━━━━━━━━━━━━\n"
+                    f"{sig_tag}\n\n"
+                    f"💰 *Giá:* `{fp(px)}`\n"
+                    f"🔬 *CTO:* `{sig['cto_score']}` {'🟢' if sig['cto_score']>0 else '🔴'}\n"
+                    f"🎲 *Prob đảo:* `{sig['probability']}%` {'✅' if sig['probability']<35 else '⚠️'}\n\n"
+                    f"🏗 *MS:* `{sig['ms_dir'].upper()}`\n"
+                    f"☁️ `{'XANH' if sig['bull_cloud'] else 'ĐỎ'}` `{'TRÊN' if sig['above_cloud'] else 'DƯỚI' if sig['below_cloud'] else 'TRONG'}`\n"
+                    f"📉 *RSI:* `{sig['rsi']}`  ⚡ *ADX:* `{sig['adx']}` {'✅' if sig['strong_trend'] else '〰️'}\n"
+                    f"📦 *Vol:* `{sig['vol_ratio']}x` {'⚡SPIKE' if sig['vol_spike'] else ''}\n"
+                    f"🕯 `{sig['candle']}`\n"
+                    f"🌐 *HTF:* `{'✅ BULL' if sig['htf_bull'] else '❌ BEAR' if sig['htf_bear'] else '〰️'}`\n\n"
+                    f"🎯 *V8:* `{master}/10`  🔗 *Conf:* `{conf}/6`\n"
+                    f"💪 *Strength:* `{sig['strength']}`\n\n"
+                    f"🔴 *SL:*  `{fp(sig['sl_long'] if is_long else sig['sl_short'])}`\n"
+                    f"🟡 *TP1:* `{fp(sig['tp1_long'] if is_long else sig['tp1_short'])}`\n"
+                    f"🟢 *TP2:* `{fp(sig['tp2_long'] if is_long else sig['tp2_short'])}`"
+                )
+                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+                break
+
+            except Exception as e:
+                log.debug(f"cmd_coin {sym}: {e}")
+                continue
+
+        if not found:
+            await update.message.reply_text(
+                f"❌ Không tìm thấy `{symbol_input}` trên `{CFG.EXCHANGE}`.\n"
+                f"Thử: `/coin BTC`, `/coin ETH`, `/coin SOL`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+    async def cmd_top(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/top — Danh sách tín hiệu mạnh nhất hiện tại (quick scan 20 coin)"""
+        if not await self._check_auth(update):
+            return
+        await update.message.reply_text(
+            "⚡ *Quick scan top 20 coins...*",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+        orig_max   = CFG.MAX_COINS
+        orig_cool  = CFG.SIGNAL_COOLDOWN
+        CFG.MAX_COINS        = 20
+        CFG.SIGNAL_COOLDOWN  = 0    # bỏ cooldown cho /top
+
+        try:
+            coins = await self.top_coins()
+            results = []
+            for sym in coins[:20]:
+                try:
+                    df_m, df_h = await asyncio.gather(
+                        self.fetch(sym, CFG.TF_PRIMARY),
+                        self.fetch(sym, CFG.TF_HTF, limit=100),
+                    )
+                    if df_m is None:
+                        continue
+                    sig = self.az.analyze(df_m, df_h)
+                    if not sig["valid"]:
+                        continue
+                    is_long = sig["cto_score"] > 0
+                    results.append({
+                        "coin":  sym.replace("/USDT:USDT","").replace("/USDT",""),
+                        "dir":   "LONG" if is_long else "SHORT",
+                        "cto":   sig["cto_score"],
+                        "prob":  sig["probability"],
+                        "score": sig["mbuy"] if is_long else sig["msell"],
+                        "conf":  sig["bull_conf"] if is_long else sig["bear_conf"],
+                        "str":   sig["strength"],
+                        "sig":   sig["final_long"] or sig["final_short"] or
+                                 (sig["lenh_tong_buy"] and sig["cto_long"]) or
+                                 (sig["lenh_tong_sell"] and sig["cto_short"]),
+                    })
+                except Exception:
+                    continue
+
+            # Sắp xếp: tín hiệu có valid signal trước, sau đó theo score
+            results.sort(key=lambda x: (x["sig"], x["score"]), reverse=True)
+
+            if not results:
+                await update.message.reply_text("⏳ Chưa có tín hiệu nổi bật.")
+                return
+
+            now = datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
+            lines = [f"⚡ *Top Coins* — `{now}`\n━━━━━━━━━━━━━━━━━"]
+            for r in results[:15]:
+                de   = "🟢" if r["dir"] == "LONG" else "🔴"
+                tag  = "✅" if r["sig"] else "  "
+                lines.append(
+                    f"{tag}{de} `{r['coin']:>8}` CTO:`{r['cto']:+.0f}` "
+                    f"P:`{r['prob']:.0f}%` V8:`{r['score']}/10` Conf:`{r['conf']}/6`"
+                )
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        finally:
+            CFG.MAX_COINS       = orig_max
+            CFG.SIGNAL_COOLDOWN = orig_cool
+
+    async def cmd_help(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/help — Danh sách lệnh"""
+        if not await self._check_auth(update):
+            return
+        await update.message.reply_text(
+            "🤖 *CTO + V8 Signal Bot — Lệnh*\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "*/scan* — Quét toàn thị trường ngay\n"
+            "*/top* — Top 20 coins mạnh nhất\n"
+            "*/coin BTC* — Phân tích 1 coin cụ thể\n"
+            "*/status* — Trạng thái bot\n"
+            "*/help* — Danh sách lệnh này\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            f"⏱ Auto scan mỗi `{CFG.SCAN_INTERVAL}s`\n"
+            f"📊 Khung: `{CFG.TF_PRIMARY.upper()}` | Exchange: `{CFG.EXCHANGE}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    # ══════════════════════════════════════════════════════════════
+    # SCAN — override để set mutex flag
+    # ══════════════════════════════════════════════════════════════
+
+    async def scan(self):
+        if self._scanning:
+            log.info("Scan đang chạy, skip lần này")
+            return
+        self._scanning = True
+        try:
+            await self._do_scan()
+        finally:
+            self._scanning = False
+
     async def run(self):
         loop = asyncio.get_running_loop()
         for s in (signal.SIGINT, signal.SIGTERM):
@@ -967,14 +1220,38 @@ class CryptoScanner:
         CFG.validate()
         await self.init()
 
+        # ── Khởi tạo Application (polling handler cho commands) ──
+        self.app = (
+            Application.builder()
+            .token(CFG.BOT_TOKEN)
+            .build()
+        )
+        self.app.add_handler(CommandHandler("scan",   self.cmd_scan))
+        self.app.add_handler(CommandHandler("status", self.cmd_status))
+        self.app.add_handler(CommandHandler("coin",   self.cmd_setcoin))
+        self.app.add_handler(CommandHandler("top",    self.cmd_top))
+        self.app.add_handler(CommandHandler("help",   self.cmd_help))
+        self.app.add_handler(CommandHandler("start",  self.cmd_help))
+
+        await self.app.initialize()
+        await self.app.start()
+        await self.app.updater.start_polling(
+            allowed_updates=["message"],
+            drop_pending_updates=True,
+        )
+        log.info("Telegram command polling started")
+
+        # ── Gửi tin khởi động ────────────────────────────────────
         await self.send(
             "🤖 *CTO + V8 Bot* khởi động\n"
             f"📡 `{CFG.EXCHANGE}` | ⏱ `{CFG.TF_PRIMARY.upper()}`\n"
             f"🔄 `{CFG.SCAN_INTERVAL}s` | 🪙 Top `{CFG.MAX_COINS}` coins\n"
             f"🎯 Conf≥`{CFG.CONFLUENCE_MIN}/6` | CTO≥`±{CFG.CTO_ENTRY_THRESHOLD}`\n"
-            f"🎲 Prob<`{int(CFG.PROB_MAX_ENTRY*100)}%` | V8≥`{CFG.MASTER_MIN}/10`"
+            f"🎲 Prob<`{int(CFG.PROB_MAX_ENTRY*100)}%` | V8≥`{CFG.MASTER_MIN}/10`\n\n"
+            f"📋 *Lệnh:* /scan /top /coin /status /help"
         )
 
+        # ── Auto scan loop ────────────────────────────────────────
         while not self._stop:
             try:
                 t0 = time.time()
@@ -986,6 +1263,10 @@ class CryptoScanner:
                 log.error(f"Main loop: {e}", exc_info=True)
                 await asyncio.sleep(60)
 
+        # ── Graceful shutdown ─────────────────────────────────────
+        await self.app.updater.stop()
+        await self.app.stop()
+        await self.app.shutdown()
         await self.close()
         log.info("Bot đã dừng hoàn toàn")
 
