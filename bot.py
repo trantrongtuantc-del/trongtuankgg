@@ -15,10 +15,10 @@ except ImportError:
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
-from telegram import Bot, Update
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter, TelegramError
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -457,55 +457,65 @@ def classify(sig:dict, sym:str) -> Optional[dict]:
     elif ((sig["lenh_tong_buy"] and cl) or (sig["lenh_tong_sell"] and cs_) or
           score>=5):
         tier="B"
-    elif cto_near and score>=4:
-        tier="C"
     else:
-        return None
+        return None   # Tier C bị loại bỏ
 
     return {"tier":tier,"dir":dirn,"coin":coin,"score":score,
-            "cto":cs,"prob":sig["probability"],"conf":sig["bull_conf"] if is_long else sig["bear_conf"]}
+            "cto":cs,"prob":sig["probability"],
+            "conf":sig["bull_conf"] if is_long else sig["bear_conf"],
+            "strength":sig["strength"]}
 
 
-def format_summary(tier_a, tier_b, tier_c, scanned:int, elapsed:float) -> list[str]:
-    now=datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
-    la=len([x for x in tier_a if x["dir"]=="LONG"]); sa_=len(tier_a)-la
-    lb=len([x for x in tier_b if x["dir"]=="LONG"]); sb_=len(tier_b)-lb
-    lc=len([x for x in tier_c if x["dir"]=="LONG"]); sc_=len(tier_c)-lc
-
-    header = (
-        f"📋 *Kết quả scan* — `{now}`\n"
-        f"🔍 `{scanned}` coins  ⏱ `{elapsed:.0f}s`\n"
-        f"🥇 Tier A (Vào ngay): 🟢`{la}` 🔴`{sa_}`\n"
-        f"🥈 Tier B (Cân nhắc): 🟢`{lb}` 🔴`{sb_}`\n"
-        f"👀 Tier C (Theo dõi): 🟢`{lc}` 🔴`{sc_}`\n"
+def _make_list_message(tier_a: list, tier_b: list,
+                        scanned: int, elapsed: float) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Tạo 1 tin nhắn danh sách ngắn gọn, mỗi coin là 1 nút bấm inline.
+    Nhấn vào nút → bot gửi tin chi tiết Entry/SL/TP.
+    Sắp xếp: Tier A trước (score cao → thấp), rồi Tier B.
+    """
+    now  = datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
+    all_sigs = (
+        sorted(tier_a, key=lambda x: x["score"], reverse=True) +
+        sorted(tier_b, key=lambda x: x["score"], reverse=True)
     )
 
-    pages=[header]
-    # Tier A — đủ chi tiết (đã gửi riêng rồi, chỉ recap ngắn)
-    if tier_a:
-        rows=[]; se_map={"SIEU MANH":"⚡","CUC MANH":"🔥","MANH":"💪","KHA":"📌","YEU":"⏳"}
-        for s in sorted(tier_a,key=lambda x:x["score"],reverse=True):
-            d="🟢" if s["dir"]=="LONG" else "🔴"
-            rows.append(f"{d} `{s['coin']:>8}` V8:`{s['score']}/10` Conf:`{s['conf']}/6` CTO:`{s['cto']:+.0f}` P:`{s['prob']:.0f}%`")
-        pages.append("🥇 *Tier A — đã alert riêng:*\n" + "\n".join(rows))
+    la = len([x for x in tier_a if x["dir"]=="LONG"])
+    sa = len(tier_a) - la
+    lb = len([x for x in tier_b if x["dir"]=="LONG"])
+    sb = len(tier_b) - lb
 
-    # Tier B — đủ Entry/SL/TP trong tin nhắn
-    if tier_b:
-        rows=[]
-        for s in sorted(tier_b,key=lambda x:x["score"],reverse=True):
-            d="🟢" if s["dir"]=="LONG" else "🔴"
-            rows.append(f"{d} `{s['coin']:>8}` V8:`{s['score']}/10` CTO:`{s['cto']:+.0f}` P:`{s['prob']:.0f}%`")
-        pages.append("🥈 *Tier B — cân nhắc:*\n" + "\n".join(rows))
+    # ── Header text ngắn gọn ──
+    lines = [
+        f"📋 *Scan xong* — `{now}`",
+        f"🔍 `{scanned}` coins  ⏱ `{elapsed:.0f}s`",
+        f"🥇 VÀO NGAY: 🟢`{la}` 🔴`{sa}`   🥈 CÂN NHẮC: 🟢`{lb}` 🔴`{sb}`",
+        f"",
+        f"👇 *Nhấn để xem chi tiết:*",
+    ]
+    text = "\n".join(lines)
 
-    # Tier C — watchlist ngắn
-    if tier_c:
-        rows=[]
-        for s in sorted(tier_c,key=lambda x:x["score"],reverse=True)[:10]:
-            d="🟢" if s["dir"]=="LONG" else "🔴"
-            rows.append(f"{d} `{s['coin']:>8}` CTO:`{s['cto']:+.0f}` P:`{s['prob']:.0f}%`")
-        pages.append("👀 *Tier C — watchlist:*\n" + "\n".join(rows))
+    # ── Inline keyboard: mỗi hàng 2 nút, tối đa 20 nút ──
+    buttons = []
+    row = []
+    for s in all_sigs[:20]:
+        tier_icon = "🥇" if s["tier"] == "A" else "🥈"
+        dir_icon  = "🟢" if s["dir"] == "LONG" else "🔴"
+        se        = SE.get(s["strength"], "📌")
+        label     = f"{tier_icon}{dir_icon} {s['coin']} {se} {s['score']}/10"
+        # callback_data: "detail:COIN:TIER"
+        row.append(InlineKeyboardButton(label, callback_data=f"detail:{s['coin']}:{s['tier']}"))
+        if len(row) == 2:
+            buttons.append(row); row = []
+    if row:
+        buttons.append(row)
 
-    return pages
+    markup = InlineKeyboardMarkup(buttons) if buttons else InlineKeyboardMarkup([])
+    return text, markup
+
+
+def format_detail(sym: str, sig: dict, tf: str, tier: str) -> str:
+    """Tin nhắn chi tiết đầy đủ — gửi khi người dùng nhấn nút inline."""
+    return format_signal(sym, sig, tf, tier)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -516,6 +526,7 @@ class CryptoScanner:
         self.az=SignalAnalyzer(); self.exch=None
         self.bot=Bot(token=CFG.BOT_TOKEN); self.app=None
         self.last:dict[str,float]={}; self._stop=False; self._scanning=False
+        self._sig_cache:dict[str,dict]={}   # coin -> sig dict để callback lấy lại
 
     def _on_sig(self,*_): self._stop=True; log.info("Đang dừng...")
 
@@ -671,6 +682,46 @@ class CryptoScanner:
             lines.append(f"{r['de']} `{r['coin']:>8}` CTO:`{r['cto']:+.0f}` P:`{r['prob']:.0f}%` V8:`{r['score']}/10` Conf:`{r['conf']}/6`")
         await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
+    async def callback_detail(self, update:Update, ctx:ContextTypes.DEFAULT_TYPE):
+        """Xử lý khi người dùng nhấn nút inline — gửi tin chi tiết."""
+        query = update.callback_query
+        await query.answer()   # tắt loading spinner trên nút
+
+        parts = query.data.split(":")
+        if len(parts) < 3 or parts[0] != "detail":
+            return
+
+        coin = parts[1]
+        tier = parts[2]
+
+        # Tìm sig từ cache
+        sig = self._sig_cache.get(coin)
+        if sig is None:
+            # Cache hết hạn — fetch lại
+            for sym in [f"{coin}/USDT:USDT", f"{coin}USDT"]:
+                try:
+                    df_m, df_h = await asyncio.gather(
+                        self.fetch(sym, CFG.TF_PRIMARY),
+                        self.fetch(sym, CFG.TF_HTF, 100))
+                    if df_m is None: continue
+                    sig = self.az.analyze(df_m, df_h)
+                    if sig["valid"]:
+                        self._sig_cache[coin] = sig
+                        break
+                except Exception:
+                    continue
+
+        if sig is None or not sig.get("valid"):
+            await query.message.reply_text(f"❌ Không lấy được dữ liệu `{coin}` — thử `/coin {coin}`",
+                                           parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Tìm symbol đầy đủ
+        sym_full = f"{coin}/USDT:USDT"
+        msg = format_detail(sym_full, sig, CFG.TF_PRIMARY, tier)
+        await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                       disable_web_page_preview=True)
+
     async def cmd_help(self, update:Update, ctx:ContextTypes.DEFAULT_TYPE):
         if not await self._auth(update): return
         await update.message.reply_text(
@@ -702,6 +753,7 @@ class CryptoScanner:
             if entry is None:
                 return None
             entry["_sig"] = sig   # đính kèm sig để format sau
+            entry["_sym"] = sym   # lưu symbol đầy đủ
             return entry
         except Exception as e:
             log.debug(f"{sym}: {e}")
@@ -717,7 +769,7 @@ class CryptoScanner:
             log.warning("Không lấy được danh sách coin"); return
 
         total_coins = len(coins)
-        tier_a=[]; tier_b=[]; tier_c=[]; sent=0
+        tier_a=[]; tier_b=[]; sent=0
         processed = 0
 
         # ── Chia batch, mỗi batch BATCH_SIZE coin chạy song song ──
@@ -735,12 +787,14 @@ class CryptoScanner:
                 processed += 1
                 if entry is None: continue
 
-                sig  = entry.pop("_sig")   # lấy sig ra khỏi entry dict
+                sig  = entry.pop("_sig")     # lấy sig ra khỏi entry dict
+                sym_full = entry.pop("_sym", f"{entry['coin']}/USDT:USDT")
                 tier = entry["tier"]
+                # Lưu vào cache để callback lấy lại khi nhấn nút
+                self._sig_cache[entry["coin"]] = sig
 
                 if tier=="A":   tier_a.append(entry)
                 elif tier=="B": tier_b.append(entry)
-                else:           tier_c.append(entry)
 
                 if self.can_send(sym):
                     msg = format_signal(sym, sig, CFG.TF_PRIMARY, tier)
@@ -755,21 +809,28 @@ class CryptoScanner:
             if (b_idx+1) % 5 == 0 or b_idx == len(batches)-1:
                 pct_done = processed/total_coins*100
                 log.info(f"Progress: {processed}/{total_coins} ({pct_done:.0f}%) "
-                         f"| A={len(tier_a)} B={len(tier_b)} C={len(tier_c)}")
+                         f"| A={len(tier_a)} B={len(tier_b)}")
 
             # Delay nhỏ giữa batch để không bị rate limit
             if b_idx < len(batches)-1:
                 await asyncio.sleep(CFG.BATCH_DELAY)
 
         elapsed = time.time()-t0
-        total   = len(tier_a)+len(tier_b)+len(tier_c)
+        total = len(tier_a)+len(tier_b)
         log.info(f"Scan xong: {processed}/{total_coins} coins | "
-                 f"A={len(tier_a)} B={len(tier_b)} C={len(tier_c)} | "
+                 f"A={len(tier_a)} B={len(tier_b)} | "
                  f"{sent} gửi | {elapsed:.1f}s ({elapsed/60:.1f}min)")
 
         if total>0:
-            for page in format_summary(tier_a, tier_b, tier_c, processed, elapsed):
-                if page.strip(): await self.send(page)
+            # Gửi 1 tin danh sách với nút bấm inline
+            txt, markup = _make_list_message(tier_a, tier_b, processed, elapsed)
+            await self.bot.send_message(
+                chat_id=CFG.CHAT_ID,
+                text=txt,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
         else:
             log.info("Không có tín hiệu phiên này")
 
@@ -792,10 +853,14 @@ class CryptoScanner:
                        ("coin",self.cmd_coin),("top",self.cmd_top),
                        ("help",self.cmd_help),("start",self.cmd_help)]:
             self.app.add_handler(CommandHandler(cmd,fn))
+        # Inline button callback
+        self.app.add_handler(CallbackQueryHandler(self.callback_detail, pattern=r"^detail:"))
 
         await self.app.initialize()
         await self.app.start()
-        await self.app.updater.start_polling(allowed_updates=["message"],drop_pending_updates=True)
+        await self.app.updater.start_polling(
+            allowed_updates=["message","callback_query"],
+            drop_pending_updates=True)
         log.info("Polling started")
 
         now=datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
