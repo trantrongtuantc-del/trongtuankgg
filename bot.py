@@ -543,23 +543,169 @@ def format_signal(symbol: str, sig: dict, tf: str) -> str:
     )
 
 
-def format_summary(sigs: list, scanned: int, elapsed: float) -> str:
-    now    = datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
-    longs  = sum(1 for s in sigs if s["dir"] == "LONG")
-    shorts = sum(1 for s in sigs if s["dir"] == "SHORT")
-    strong = [s for s in sigs if s["strength"] in ("SIEU MANH", "CUC MANH")]
-    msg = (
-        f"📋 *Kết quả scan* — `{now}`\n"
-        f"🔍 `{scanned}` coins  ⏱ `{elapsed:.0f}s`\n"
-        f"🟢 LONG: `{longs}`   🔴 SHORT: `{shorts}`\n"
-        f"⚡ Tín hiệu mạnh: `{len(strong)}`\n"
+def _strength_emoji(s: str) -> str:
+    return {"SIEU MANH": "⚡", "CUC MANH": "🔥", "MANH": "💪",
+            "KHA": "📌", "YEU": "⏳"}.get(s, "📌")
+
+
+def _coin_row(s: dict, show_sl_tp: bool = True) -> str:
+    """Block thông tin 1 coin — đủ để quyết định vào lệnh ngay trên mobile."""
+    se       = _strength_emoji(s["strength"])
+    lt       = " 🏆TỔNG" if s.get("lenh_tong") else ""
+    pi       = "✅" if s["prob"] < 35 else ("⚠️" if s["prob"] < 60 else "🔴")
+    candle   = s["candle"] if s["candle"] != "—" else ""
+    tier_tag = {"A": "🥇", "B": "🥈", "C": "🥉"}.get(s.get("tier", "C"), "")
+    arrow    = "▲" if s["dir"] == "LONG" else "▼"
+    px       = s["price"]
+
+    row = (
+        f"\n{tier_tag}{se} *{s['coin']}/USDT* {arrow}{lt}\n"
+        f"  💰 *Vào:* `{fp(px)}`\n"
+        f"  📊 V8:`{s['score']}/10`  🔗Conf:`{s['conf']}/6`  "
+        f"CTO:`{s['cto']}`\n"
+        f"  🎲 Prob đảo:`{s['prob']}%`{pi}  "
+        f"RSI:`{s['rsi']}`"
+        + (f"  🕯`{candle}`" if candle else "") + "\n"
     )
-    if strong:
-        msg += "\n*Top:*\n"
-        for s in strong[:5]:
-            e = "🟢" if s["dir"] == "LONG" else "🔴"
-            msg += f"  {e} `{s['coin']}` {s['strength']} ({s['score']}/10)\n"
-    return msg
+
+    if show_sl_tp:
+        # Tính % cách giá
+        if s["dir"] == "LONG":
+            sl_pct  = round((px - s["sl"])  / px * 100, 2)
+            tp1_pct = round((s["tp1"] - px) / px * 100, 2)
+            tp2_pct = round((s["tp2"] - px) / px * 100, 2)
+        else:
+            sl_pct  = round((s["sl"]  - px) / px * 100, 2)
+            tp1_pct = round((px - s["tp1"]) / px * 100, 2)
+            tp2_pct = round((px - s["tp2"]) / px * 100, 2)
+
+        row += (
+            f"  🔴 SL:  `{fp(s['sl'])}` _(-{sl_pct}%)_\n"
+            f"  🟡 TP1: `{fp(s['tp1'])}` _(+{tp1_pct}% | 1:{CFG.TP1_RR}R)_\n"
+            f"  🟢 TP2: `{fp(s['tp2'])}` _(+{tp2_pct}% | 1:{CFG.TP2_RR}R)_\n"
+        )
+
+    row += "  ─────────────────────"
+    return row
+
+
+def _chunk_messages(header: str, rows: list[str], limit: int = 3800) -> list[str]:
+    """Chia danh sách rows thành nhiều tin nếu vượt giới hạn Telegram."""
+    pages  = []
+    chunk  = header + "\n"
+    for r in rows:
+        if len(chunk) + len(r) > limit:
+            pages.append(chunk.rstrip())
+            chunk = r
+        else:
+            chunk += r
+    if chunk.strip():
+        pages.append(chunk.rstrip())
+    return pages
+
+
+def format_summary(
+    tier_a: list,   # Signal mạnh — alert riêng đã gửi rồi, recap ở đây
+    tier_b: list,   # Signal trung bình — đủ điều kiện, tự cân nhắc
+    tier_c: list,   # Watchlist — đang tiến gần, theo dõi
+    scanned: int,
+    elapsed: float,
+) -> list[str]:
+    """
+    Trả về list tin nhắn Telegram.
+
+    Tier A  (⚡🔥)  — CẢ 3 lớp đồng thuận + strength SIEU MANH / CUC MANH
+    Tier B  (💪📌)  — 2/3 lớp + mbuy/msell ≥ 6 — vào lệnh cần xem thêm chart
+    Tier C  (👀)    — Watchlist: CTO ok + 1 lớp khác, chưa hội đủ điều kiện
+    """
+    now = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    messages = []
+
+    # ── Tin 1: Header + thống kê ─────────────────────────────────
+    la = len([x for x in tier_a if x["dir"] == "LONG"])
+    sa = len([x for x in tier_a if x["dir"] == "SHORT"])
+    lb = len([x for x in tier_b if x["dir"] == "LONG"])
+    sb = len([x for x in tier_b if x["dir"] == "SHORT"])
+    lc = len([x for x in tier_c if x["dir"] == "LONG"])
+    sc = len([x for x in tier_c if x["dir"] == "SHORT"])
+
+    header = (
+        f"📊 *BẢNG TÍN HIỆU* — `{now}`\n"
+        f"🔍 Quét `{scanned}` coins | ⏱ `{elapsed:.0f}s`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡🔥 *Tier A* (Vào ngay): 🟢`{la}` 🔴`{sa}`\n"
+        f"💪📌 *Tier B* (Cân nhắc): 🟢`{lb}` 🔴`{sb}`\n"
+        f"👀  *Watchlist*:          🟢`{lc}` 🔴`{sc}`"
+    )
+    messages.append(header)
+
+    # ── Tin 2+: Tier A LONG ───────────────────────────────────────
+    a_long  = sorted([x for x in tier_a if x["dir"] == "LONG"],  key=lambda x: x["score"], reverse=True)
+    a_short = sorted([x for x in tier_a if x["dir"] == "SHORT"], key=lambda x: x["score"], reverse=True)
+    b_long  = sorted([x for x in tier_b if x["dir"] == "LONG"],  key=lambda x: x["score"], reverse=True)
+    b_short = sorted([x for x in tier_b if x["dir"] == "SHORT"], key=lambda x: x["score"], reverse=True)
+    c_long  = sorted([x for x in tier_c if x["dir"] == "LONG"],  key=lambda x: x["score"], reverse=True)
+    c_short = sorted([x for x in tier_c if x["dir"] == "SHORT"], key=lambda x: x["score"], reverse=True)
+
+    # Tier A LONG
+    if a_long:
+        rows = [_coin_row(s, show_sl_tp=True) for s in a_long]
+        pages = _chunk_messages(
+            f"🥇⚡ *TIER A — VÀO LỆNH LONG* ({len(a_long)} coin)\n"
+            f"_CẢ 3 lớp đồng thuận — Vào ngay_\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━", rows)
+        messages.extend(pages)
+
+    # Tier A SHORT
+    if a_short:
+        rows = [_coin_row(s, show_sl_tp=True) for s in a_short]
+        pages = _chunk_messages(
+            f"🥇⚡ *TIER A — VÀO LỆNH SHORT* ({len(a_short)} coin)\n"
+            f"_CẢ 3 lớp đồng thuận — Vào ngay_\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━", rows)
+        messages.extend(pages)
+
+    # Tier B LONG
+    if b_long:
+        rows = [_coin_row(s, show_sl_tp=True) for s in b_long]
+        pages = _chunk_messages(
+            f"🥈💪 *TIER B — CÂN NHẮC LONG* ({len(b_long)} coin)\n"
+            f"_2/3 lớp — Xem chart trước khi vào_\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━", rows)
+        messages.extend(pages)
+
+    # Tier B SHORT
+    if b_short:
+        rows = [_coin_row(s, show_sl_tp=True) for s in b_short]
+        pages = _chunk_messages(
+            f"🥈💪 *TIER B — CÂN NHẮC SHORT* ({len(b_short)} coin)\n"
+            f"_2/3 lớp — Xem chart trước khi vào_\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━", rows)
+        messages.extend(pages)
+
+    # Tier C — compact, không có SL/TP vì chưa đủ điều kiện
+    c_all = sorted(c_long + c_short, key=lambda x: (x["dir"], -x["score"]))
+    if c_all:
+        rows = [_coin_row(s, show_sl_tp=False) for s in c_all]
+        pages = _chunk_messages(
+            f"🥉👀 *WATCHLIST* ({len(c_all)} coin)\n"
+            f"_CTO đang vào vùng — Theo dõi, chưa vào_\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━", rows)
+        messages.extend(pages)
+
+    messages.append(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📖 *Chú thích:*\n"
+        "🥇 Tier A = CẢ 3 lớp đồng thuận → Vào ngay\n"
+        "🥈 Tier B = 2/3 lớp → Xem chart confirm\n"
+        "🥉 Watchlist = Đang tiến gần → Theo dõi\n"
+        "✅ Prob <35% = Trend còn non, an toàn\n"
+        "⚠️ Prob 35-60% = Cẩn thận có thể đảo\n"
+        "🔴 Prob >60% = Nguy cơ cao, tránh vào\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ _DYOR — Không phải khuyến nghị đầu tư_"
+    )
+    return messages
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -644,6 +790,97 @@ class CryptoScanner:
                 log.error(f"Telegram: {e}")
                 await asyncio.sleep(5 * (att + 1))
 
+    def _classify(self, sig: dict, sym: str) -> Optional[dict]:
+        """
+        Phân loại tín hiệu thành 3 tier:
+
+        Tier A — CẢ 3 lớp đồng thuận (final_long/short hoặc lenh_tong)
+                 strength SIEU MANH hoặc CUC MANH
+                 → Gửi alert riêng + vào bảng
+
+        Tier B — 2/3 lớp: (CTO ok + V8 mbuy/msell ≥ 5) HOẶC
+                           (V8 final + conf ≥ 3) HOẶC
+                           (lenh_tong nhưng strength thấp hơn)
+                 → Vào bảng, tự cân nhắc
+
+        Tier C — Watchlist: CTO ok (score vượt threshold) + ít nhất 1 điều kiện V8
+                 → Vào bảng watchlist, không có SL/TP
+        """
+        coin = sym.replace("/USDT:USDT", "").replace("/USDT", "")
+        cs   = sig["cto_score"]
+        prob = sig["probability"]
+        cto_ok_long  = sig["cto_long"]
+        cto_ok_short = sig["cto_short"]
+        cto_any      = abs(cs) > CFG.CTO_ENTRY_THRESHOLD * 0.8   # 80% threshold = watchlist
+
+        # Hướng tín hiệu
+        is_long = (sig["final_long"] or
+                   (sig["lenh_tong_buy"] and cto_ok_long) or
+                   (cto_ok_long and sig["mbuy"] >= 4) or
+                   (not cto_ok_long and not cto_ok_short and cs > CFG.CTO_ENTRY_THRESHOLD * 0.8 and sig["mbuy"] > sig["msell"]))
+
+        is_short = (not is_long) and (
+                    sig["final_short"] or
+                    (sig["lenh_tong_sell"] and cto_ok_short) or
+                    (cto_ok_short and sig["msell"] >= 4) or
+                    (cs < -CFG.CTO_ENTRY_THRESHOLD * 0.8 and sig["msell"] > sig["mbuy"]))
+
+        if not is_long and not is_short:
+            return None
+
+        dirn  = "LONG" if is_long else "SHORT"
+        score = sig["mbuy"] if is_long else sig["msell"]
+        conf  = sig["bull_conf"] if is_long else sig["bear_conf"]
+
+        base = {
+            "dir":       dirn,
+            "coin":      coin,
+            "strength":  sig["strength"],
+            "score":     score,
+            "conf":      conf,
+            "ms_dir":    sig["ms_dir"],
+            "price":     sig["price"],
+            "sl":        sig["sl_long"]   if is_long else sig["sl_short"],
+            "tp1":       sig["tp1_long"]  if is_long else sig["tp1_short"],
+            "tp2":       sig["tp2_long"]  if is_long else sig["tp2_short"],
+            "cto":       cs,
+            "prob":      prob,
+            "rsi":       sig["rsi"],
+            "candle":    sig["candle"],
+            "lenh_tong": sig["lenh_tong_buy"] or sig["lenh_tong_sell"],
+        }
+
+        # ── Tier A: tất cả điều kiện mạnh ───────────────────────
+        tier_a_cond = (
+            (sig["final_long"] or sig["final_short"] or
+             (sig["lenh_tong_buy"] and cto_ok_long) or
+             (sig["lenh_tong_sell"] and cto_ok_short)) and
+            sig["strength"] in ("SIEU MANH", "CUC MANH", "MANH") and
+            score >= 6
+        )
+        if tier_a_cond:
+            return {**base, "tier": "A"}
+
+        # ── Tier B: 2/3 lớp hoặc score tốt ─────────────────────
+        tier_b_cond = (
+            (cto_ok_long or cto_ok_short) and score >= 5
+        ) or (
+            score >= 6 and conf >= 3
+        ) or (
+            sig["lenh_tong_buy"] or sig["lenh_tong_sell"]
+        )
+        if tier_b_cond:
+            return {**base, "tier": "B"}
+
+        # ── Tier C: Watchlist — CTO gần ngưỡng + V8 thuận ───────
+        tier_c_cond = (
+            cto_any and score >= 4 and conf >= 2
+        )
+        if tier_c_cond:
+            return {**base, "tier": "C"}
+
+        return None
+
     async def scan(self):
         if not self.in_session():
             log.info("Ngoài giờ London/NY — skip")
@@ -651,8 +888,10 @@ class CryptoScanner:
 
         t0    = time.time()
         coins = await self.top_coins()
-        sigs  = []
-        sent  = 0
+        tier_a: list = []
+        tier_b: list = []
+        tier_c: list = []
+        sent = 0
 
         for sym in coins:
             if self._stop:
@@ -669,36 +908,56 @@ class CryptoScanner:
                 if not sig["valid"]:
                     continue
 
-                has = (sig["final_long"] or sig["final_short"] or
-                       (sig["lenh_tong_buy"] and sig["cto_long"]) or
-                       (sig["lenh_tong_sell"] and sig["cto_short"]))
-                if not has:
+                entry = self._classify(sig, sym)
+                if entry is None:
                     continue
 
-                dirn  = "LONG" if (sig["final_long"] or sig["lenh_tong_buy"]) else "SHORT"
-                coin  = sym.replace("/USDT:USDT","").replace("/USDT","")
-                score = sig["mbuy"] if dirn == "LONG" else sig["msell"]
-                sigs.append({"dir": dirn, "coin": coin,
-                              "strength": sig["strength"], "score": score})
-
-                if self.can_send(sym):
-                    await self.send(format_signal(sym, sig, CFG.TF_PRIMARY))
-                    self.last[sym] = time.time()
-                    sent += 1
-                    log.info(f"{dirn} {sym} CTO={sig['cto_score']} "
-                             f"Prob={sig['probability']}% Score={score}/10 "
-                             f"Conf={sig['bull_conf'] if dirn=='LONG' else sig['bear_conf']}/6")
-                    await asyncio.sleep(1.5)
+                tier = entry["tier"]
+                if tier == "A":
+                    tier_a.append(entry)
+                    # Alert riêng lẻ ngay cho Tier A
+                    if self.can_send(sym):
+                        await self.send(format_signal(sym, sig, CFG.TF_PRIMARY))
+                        self.last[sym] = time.time()
+                        sent += 1
+                        log.info(f"[A] {entry['dir']} {entry['coin']} "
+                                 f"Score={entry['score']}/10 Conf={entry['conf']}/6 "
+                                 f"CTO={entry['cto']} Prob={entry['prob']}%")
+                        await asyncio.sleep(1.5)
+                elif tier == "B":
+                    tier_b.append(entry)
+                    log.info(f"[B] {entry['dir']} {entry['coin']} "
+                             f"Score={entry['score']}/10 CTO={entry['cto']}")
+                else:
+                    tier_c.append(entry)
+                    log.info(f"[C] {entry['dir']} {entry['coin']} "
+                             f"Score={entry['score']}/10 CTO={entry['cto']}")
 
             except Exception as e:
                 log.warning(f"{sym}: {e}")
 
-        elapsed = time.time() - t0
-        log.info(f"Scan: {len(coins)} coins | {len(sigs)} signals | "
-                 f"{sent} sent | {elapsed:.1f}s")
+        elapsed   = time.time() - t0
+        total_sig = len(tier_a) + len(tier_b) + len(tier_c)
+        log.info(
+            f"Scan done: {len(coins)} coins | "
+            f"A={len(tier_a)} B={len(tier_b)} C={len(tier_c)} | "
+            f"{sent} alerts | {elapsed:.1f}s"
+        )
 
-        if sigs:
-            await self.send(format_summary(sigs, len(coins), elapsed))
+        # Gửi bảng tổng hợp
+        now_str = datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
+        if total_sig > 0:
+            pages = format_summary(tier_a, tier_b, tier_c, len(coins), elapsed)
+            for page in pages:
+                if page.strip():
+                    await self.send(page)
+                    await asyncio.sleep(0.8)
+        else:
+            await self.send(
+                f"🔍 *Scan xong* — `{now_str}`\n"
+                f"Quét `{len(coins)}` coins | `{elapsed:.0f}s`\n"
+                f"_Chưa có tín hiệu đủ điều kiện_"
+            )
 
     async def run(self):
         loop = asyncio.get_running_loop()
