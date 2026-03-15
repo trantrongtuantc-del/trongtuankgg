@@ -1,7 +1,0 @@
-[build]
-builder = "NIXPACKS"
-
-[deploy]
-startCommand = "python crypto_ema20_50_bot.py"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
