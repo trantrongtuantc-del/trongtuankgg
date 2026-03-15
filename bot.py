@@ -34,11 +34,13 @@ class Config:
     EXCHANGE        = os.environ.get("EXCHANGE",  "binanceusdm")
     TF_PRIMARY      = os.environ.get("TF_PRIMARY","4h")
     TF_HTF          = os.environ.get("TF_HTF",   "1d")
-    MIN_VOLUME_USDT = float(os.environ.get("MIN_VOLUME_USDT","10000000"))
+    MIN_VOLUME_USDT = float(os.environ.get("MIN_VOLUME_USDT","500000"))  # hạ xuống 500K để lấy đủ 500 coin
     SCAN_INTERVAL   = int(os.environ.get("SCAN_INTERVAL","300"))
-    MAX_COINS       = int(os.environ.get("MAX_COINS","80"))
+    MAX_COINS       = int(os.environ.get("MAX_COINS","500"))              # top 500
     SIGNAL_COOLDOWN = int(os.environ.get("SIGNAL_COOLDOWN","900"))
     CANDLES         = 220
+    BATCH_SIZE      = int(os.environ.get("BATCH_SIZE","20"))              # coin song song mỗi batch
+    BATCH_DELAY     = float(os.environ.get("BATCH_DELAY","0.3"))          # giây delay giữa batch
 
     # CTO
     CTO_SPACING         = int(os.environ.get("CTO_SPACING","3"))
@@ -527,16 +529,30 @@ class CryptoScanner:
         if self.exch: await self.exch.close()
 
     async def top_coins(self) -> list[str]:
+        """
+        Lấy top MAX_COINS (500) theo volume USDT.
+        Lọc: chỉ USDT pairs, loại stablecoin & wrapped token.
+        """
         try:
             t=await self.exch.fetch_tickers(); pairs=[]
+            # Các token cần loại bỏ (stablecoin, wrapped, index)
+            EXCLUDE = {"USDC","BUSD","TUSD","USDP","DAI","FDUSD",
+                       "WBTC","WETH","BETH","LDOETH",
+                       "DEFI","NFT","BTCDOM"}
             for sym,tk in t.items():
+                # Chỉ lấy USDT perpetual futures
                 if not (sym.endswith("/USDT:USDT") or (sym.endswith("USDT") and "/" in sym)):
                     continue
-                qv=tk.get("quoteVolume") or 0
-                if qv>=CFG.MIN_VOLUME_USDT: pairs.append((sym,qv))
-            pairs.sort(key=lambda x:x[1],reverse=True)
-            r=[p[0] for p in pairs[:CFG.MAX_COINS]]
-            log.info(f"{len(r)} coins đủ volume"); return r
+                base = sym.split("/")[0].replace("USDT","")
+                if base in EXCLUDE:
+                    continue
+                qv = tk.get("quoteVolume") or 0
+                if qv >= CFG.MIN_VOLUME_USDT:
+                    pairs.append((sym, qv))
+            pairs.sort(key=lambda x:x[1], reverse=True)
+            r = [p[0] for p in pairs[:CFG.MAX_COINS]]
+            log.info(f"top_coins: {len(r)} coins (vol>={CFG.MIN_VOLUME_USDT/1e6:.1f}M)")
+            return r
         except Exception as e:
             log.error(f"top_coins: {e}"); return []
 
@@ -671,48 +687,88 @@ class CryptoScanner:
             parse_mode=ParseMode.MARKDOWN)
 
     # ── Scan logic ────────────────────────────────────────────────
+    async def _analyze_one(self, sym: str) -> Optional[dict]:
+        """Fetch + analyze 1 coin, trả về dict signal hoặc None."""
+        try:
+            df_m, df_h = await asyncio.gather(
+                self.fetch(sym, CFG.TF_PRIMARY),
+                self.fetch(sym, CFG.TF_HTF, 100))
+            if df_m is None:
+                return None
+            sig = self.az.analyze(df_m, df_h)
+            if not sig["valid"]:
+                return None
+            entry = classify(sig, sym)
+            if entry is None:
+                return None
+            entry["_sig"] = sig   # đính kèm sig để format sau
+            return entry
+        except Exception as e:
+            log.debug(f"{sym}: {e}")
+            return None
+
     async def _do_scan(self):
         if not self.in_session():
             log.info("Ngoài giờ — skip (SESSION_FILTER=true)"); return
-        t0=time.time(); coins=await self.top_coins()
-        tier_a=[]; tier_b=[]; tier_c=[]; sent=0
 
-        for sym in coins:
+        t0 = time.time()
+        coins = await self.top_coins()
+        if not coins:
+            log.warning("Không lấy được danh sách coin"); return
+
+        total_coins = len(coins)
+        tier_a=[]; tier_b=[]; tier_c=[]; sent=0
+        processed = 0
+
+        # ── Chia batch, mỗi batch BATCH_SIZE coin chạy song song ──
+        batch_size = CFG.BATCH_SIZE
+        batches = [coins[i:i+batch_size] for i in range(0, len(coins), batch_size)]
+        log.info(f"Bắt đầu scan {total_coins} coins | {len(batches)} batches x {batch_size}")
+
+        for b_idx, batch in enumerate(batches):
             if self._stop: break
-            try:
-                df_m,df_h=await asyncio.gather(
-                    self.fetch(sym,CFG.TF_PRIMARY),
-                    self.fetch(sym,CFG.TF_HTF,100))
-                if df_m is None: continue
-                sig=self.az.analyze(df_m,df_h)
-                if not sig["valid"]: continue
-                entry=classify(sig,sym)
+
+            # Chạy song song toàn bộ coin trong batch
+            results = await asyncio.gather(*[self._analyze_one(sym) for sym in batch])
+
+            for sym, entry in zip(batch, results):
+                processed += 1
                 if entry is None: continue
 
-                tier=entry["tier"]
+                sig  = entry.pop("_sig")   # lấy sig ra khỏi entry dict
+                tier = entry["tier"]
+
                 if tier=="A":   tier_a.append(entry)
                 elif tier=="B": tier_b.append(entry)
                 else:           tier_c.append(entry)
 
-                # FIX: TẤT CẢ Tier A, B, C đều gửi tin đầy đủ có Entry/SL/TP
                 if self.can_send(sym):
-                    msg=format_signal(sym,sig,CFG.TF_PRIMARY,tier)
+                    msg = format_signal(sym, sig, CFG.TF_PRIMARY, tier)
                     await self.send(msg)
-                    self.last[sym]=time.time(); sent+=1
+                    self.last[sym] = time.time(); sent += 1
                     log.info(f"[{tier}] {entry['dir']} {entry['coin']} "
                              f"CTO={entry['cto']:+.0f} Prob={entry['prob']:.0f}% "
                              f"V8={entry['score']}/10 Conf={entry['conf']}/6")
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.0)
 
-            except Exception as e:
-                log.warning(f"{sym}: {e}")
+            # Progress log mỗi 5 batch (~100 coins)
+            if (b_idx+1) % 5 == 0 or b_idx == len(batches)-1:
+                pct_done = processed/total_coins*100
+                log.info(f"Progress: {processed}/{total_coins} ({pct_done:.0f}%) "
+                         f"| A={len(tier_a)} B={len(tier_b)} C={len(tier_c)}")
 
-        elapsed=time.time()-t0
-        total=len(tier_a)+len(tier_b)+len(tier_c)
-        log.info(f"Scan: {len(coins)} coins | A={len(tier_a)} B={len(tier_b)} C={len(tier_c)} | {sent} gửi | {elapsed:.1f}s")
+            # Delay nhỏ giữa batch để không bị rate limit
+            if b_idx < len(batches)-1:
+                await asyncio.sleep(CFG.BATCH_DELAY)
+
+        elapsed = time.time()-t0
+        total   = len(tier_a)+len(tier_b)+len(tier_c)
+        log.info(f"Scan xong: {processed}/{total_coins} coins | "
+                 f"A={len(tier_a)} B={len(tier_b)} C={len(tier_c)} | "
+                 f"{sent} gửi | {elapsed:.1f}s ({elapsed/60:.1f}min)")
 
         if total>0:
-            for page in format_summary(tier_a,tier_b,tier_c,len(coins),elapsed):
+            for page in format_summary(tier_a, tier_b, tier_c, processed, elapsed):
                 if page.strip(): await self.send(page)
         else:
             log.info("Không có tín hiệu phiên này")
