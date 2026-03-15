@@ -35,7 +35,6 @@ class Config:
     TF_PRIMARY      = os.environ.get("TF_PRIMARY","4h")
     TF_HTF          = os.environ.get("TF_HTF",   "1d")
     MIN_VOLUME_USDT = float(os.environ.get("MIN_VOLUME_USDT","500000"))  # hạ xuống 500K để lấy đủ 500 coin
-    SCAN_INTERVAL   = int(os.environ.get("SCAN_INTERVAL","300"))
     MAX_COINS       = int(os.environ.get("MAX_COINS","500"))              # top 500
     SIGNAL_COOLDOWN = int(os.environ.get("SIGNAL_COOLDOWN","900"))
     CANDLES         = 220
@@ -78,7 +77,7 @@ class Config:
             log.critical("THIẾU BOT_TOKEN hoặc CHAT_ID — set trong Railway Variables")
             sys.exit(1)
         log.info(f"Config OK | {cls.EXCHANGE} | {cls.TF_PRIMARY} | "
-                 f"SCAN={cls.SCAN_INTERVAL}s | SESSION_FILTER={cls.SESSION_FILTER}")
+                 f"SESSION_FILTER={cls.SESSION_FILTER}")
 
 CFG = Config()
 
@@ -618,16 +617,14 @@ class CryptoScanner:
     async def cmd_status(self, update:Update, ctx:ContextTypes.DEFAULT_TYPE):
         if not await self._auth(update): return
         now=datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-        insess="✅ Trong giờ" if self.in_session() else "❌ Ngoài giờ (24/7 nếu SESSION_FILTER=false)"
+        insess="—"  # Auto scan đã tắt
         await update.message.reply_text(
             f"🤖 *Bot Status*\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"🕐 `{now}`\n"
             f"📡 Exchange: `{CFG.EXCHANGE}`\n"
             f"⏱ Khung: `{CFG.TF_PRIMARY.upper()}`\n"
-            f"🔄 Scan mỗi: `{CFG.SCAN_INTERVAL}s`\n"
             f"🏃 Đang quét: `{'Có' if self._scanning else 'Không'}`\n"
-            f"🕒 Session: `{insess}`\n"
             f"📬 Cooldown đang track: `{len(self.last)} coins`\n"
             f"🎯 CTO≥`±{CFG.CTO_ENTRY_THRESHOLD}` | Conf≥`{CFG.CONFLUENCE_MIN}/6`\n"
             f"🎲 Prob<`{int(CFG.PROB_MAX_ENTRY*100)}%` | V8≥`{CFG.MASTER_MIN}/10`",
@@ -733,8 +730,7 @@ class CryptoScanner:
             "*/status* — Trạng thái bot\n"
             "*/help* — Danh sách lệnh\n"
             "━━━━━━━━━━━━━━━━━\n"
-            f"⏱ Auto scan mỗi `{CFG.SCAN_INTERVAL}s` | `{CFG.TF_PRIMARY.upper()}`\n"
-            f"🌐 Quét 24/7 (SESSION\\_FILTER=false)",
+            f"📊 Khung: `{CFG.TF_PRIMARY.upper()}` | Exchange: `{CFG.EXCHANGE}`",
             parse_mode=ParseMode.MARKDOWN)
 
     # ── Scan logic ────────────────────────────────────────────────
@@ -865,24 +861,21 @@ class CryptoScanner:
 
         now=datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
         await self.send(
-            f"🤖 *CTO + V8 Bot* v3.0 khởi động\n"
+            f"🤖 *CTO + V8 Bot* v3.1 khởi động\n"
             f"🕐 `{now}`\n"
             f"📡 `{CFG.EXCHANGE}` | ⏱ `{CFG.TF_PRIMARY.upper()}`\n"
-            f"🔄 `{CFG.SCAN_INTERVAL}s` | 🪙 Top `{CFG.MAX_COINS}` coins\n"
-            f"🌐 Quét 24/7 (SESSION\\_FILTER={'ON' if CFG.SESSION_FILTER else 'OFF'})\n"
+            f"🪙 Top `{CFG.MAX_COINS}` coins | Vol≥`{CFG.MIN_VOLUME_USDT/1e6:.1f}M`\n"
             f"🎯 CTO≥`±{CFG.CTO_ENTRY_THRESHOLD}` | Conf≥`{CFG.CONFLUENCE_MIN}/6`\n"
             f"🎲 Prob<`{int(CFG.PROB_MAX_ENTRY*100)}%` | V8≥`{CFG.MASTER_MIN}/10`\n\n"
             f"📋 Lệnh: /scan /top /coin /status /help"
         )
 
-        while not self._stop:
-            try:
-                t0=time.time()
-                await self.scan()
-                wait=max(0,CFG.SCAN_INTERVAL-(time.time()-t0))
-                log.info(f"Chờ {wait:.0f}s..."); await asyncio.sleep(wait)
-            except Exception as e:
-                log.error(f"Main loop: {e}",exc_info=True); await asyncio.sleep(60)
+        # Giữ bot sống — chờ SIGTERM/SIGINT để dừng
+        stop_event = asyncio.Event()
+        loop.add_signal_handler(signal.SIGINT,  stop_event.set)
+        loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+        log.info("Bot đang chờ lệnh — /scan /top /coin /status /help")
+        await stop_event.wait()
 
         await self.app.updater.stop(); await self.app.stop()
         await self.app.shutdown(); await self.close()
