@@ -1,7 +1,5 @@
 """
-indicators.py
-Tái tạo logic chỉ báo từ Pine Script Ultimate Signal V8
-sử dụng pandas + numpy thuần (không cần pandas-ta / ta-lib)
+indicators.py - Ultimate Signal V8 (điều kiện đã nới lỏng)
 """
 import numpy as np
 import pandas as pd
@@ -46,7 +44,6 @@ def macd(close: pd.Series, fast=12, slow=26, signal=9):
     return line, sig, hist
 
 def adx_dmi(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
-    """Returns (di_plus, di_minus, adx)"""
     up    = high.diff()
     down  = -low.diff()
     plus  = np.where((up > down) & (up > 0), up, 0.0)
@@ -80,7 +77,7 @@ def ichimoku(high: pd.Series, low: pd.Series,
 class Signal:
     symbol:      str
     direction:   str        # "BUY" | "SELL"
-    score:       int        # master score (0-10)
+    score:       int
     buy_score:   int
     sell_score:  int
     close:       float
@@ -91,39 +88,31 @@ class Signal:
     adx_val:     float
     macd_hist:   float
     vol_spike:   bool
-    ema_align:   str        # "BULL" | "BEAR" | "MIX"
-    cloud:       str        # "ABOVE" | "BELOW" | "IN"
-    ms_dir:      str        # "bullish" | "bearish"
-    strength:    str        # label
+    ema_align:   str
+    cloud:       str
+    ms_dir:      str
+    strength:    str
     atr_val:     float
     note:        str = ""
-
-    def strength_label(self) -> str:
-        s = self.score
-        return ("⚡ SIÊU MẠNH" if s >= 9 else
-                "🔥 CỰC MẠNH" if s >= 8 else
-                "💪 MẠNH"     if s >= 7 else
-                "📌 KHÁ"      if s >= 6 else "⏳ YẾU")
-
-    def emoji(self) -> str:
-        return "🟢" if self.direction == "BUY" else "🔴"
 
     def to_message(self) -> str:
         arr  = "▲" if self.direction == "BUY" else "▼"
         icon = "🟢" if self.direction == "BUY" else "🔴"
-        rr_s = f"1:{self.rr:.1f}"
+        tp_pct = abs(self.tp - self.close) / self.close * 100
+        sl_pct = abs(self.sl - self.close) / self.close * 100
+        tp_sign = "+" if self.direction == "BUY" else "-"
+        sl_sign = "-" if self.direction == "BUY" else "+"
         return (
             f"{icon} <b>{arr} {self.direction} — {self.symbol}</b>\n"
-            f"🏆 Score: <b>{self.score}/10</b>  {self.strength_label()}\n"
+            f"🏆 Score : <b>{self.score}/10</b>  {self.strength}\n"
             f"💰 Entry : <code>{self.close:.6g}</code>\n"
-            f"🎯 TP    : <code>{self.tp:.6g}</code>  ({'+' if self.direction=='BUY' else '-'}"
-            f"{abs(self.tp - self.close)/self.close*100:.1f}%)\n"
-            f"🛡 SL    : <code>{self.sl:.6g}</code>  ({'-' if self.direction=='BUY' else '+'}"
-            f"{abs(self.sl - self.close)/self.close*100:.1f}%)\n"
-            f"📐 RR    : {rr_s}\n"
+            f"🎯 TP    : <code>{self.tp:.6g}</code>  ({tp_sign}{tp_pct:.1f}%)\n"
+            f"🛡 SL    : <code>{self.sl:.6g}</code>  ({sl_sign}{sl_pct:.1f}%)\n"
+            f"📐 RR    : 1:{self.rr:.1f}\n"
             f"📊 RSI   : {self.rsi_val:.1f}  |  ADX: {self.adx_val:.1f}\n"
             f"📈 Cloud : {self.cloud}  |  MS: {self.ms_dir}\n"
             f"⚡ Vol   : {'SPIKE 🔥' if self.vol_spike else 'normal'}\n"
+            f"📉 EMA   : {self.ema_align}\n"
             f"🕐 TF    : {cfg.TIMEFRAME.upper()}"
         )
 
@@ -133,11 +122,7 @@ class Signal:
 # ─────────────────────────────────────────────────────────
 
 def analyze(symbol: str, df: pd.DataFrame) -> Optional[Signal]:
-    """
-    df phải có cột: open, high, low, close, volume
-    Trả về Signal hoặc None nếu không đủ điều kiện
-    """
-    if len(df) < cfg.CANDLES_NEEDED:
+    if len(df) < 100:   # giảm từ 300 → 100
         return None
 
     close  = df["close"]
@@ -146,37 +131,24 @@ def analyze(symbol: str, df: pd.DataFrame) -> Optional[Signal]:
     opn    = df["open"]
     volume = df["volume"]
 
-    # ── EMAs ──────────────────────────────────────────────
-    e9    = ema(close, cfg.EMA_FAST)
-    e21   = ema(close, cfg.EMA_MED)
-    e55   = ema(close, cfg.EMA_SLOW)
-    e50   = ema(close, cfg.EMA_TREND)
-    e200  = ema(close, cfg.EMA_MAJOR)
+    # EMAs
+    e9   = ema(close, cfg.EMA_FAST)
+    e21  = ema(close, cfg.EMA_MED)
+    e55  = ema(close, cfg.EMA_SLOW)
+    e50  = ema(close, cfg.EMA_TREND)
+    e200 = ema(close, cfg.EMA_MAJOR)
 
-    # ── ATR ───────────────────────────────────────────────
-    atr_s = atr(high, low, close, cfg.ATR_PERIOD)
-
-    # ── RSI ───────────────────────────────────────────────
-    rsi_s = rsi(close, cfg.RSI_PERIOD)
-
-    # ── MACD ─────────────────────────────────────────────
-    macd_l, macd_sig, macd_h = macd(close, cfg.MACD_FAST, cfg.MACD_SLOW, cfg.MACD_SIGNAL)
-
-    # ── ADX ───────────────────────────────────────────────
-    di_p, di_m, adx_s = adx_dmi(high, low, close, cfg.ADX_PERIOD)
-
-    # ── Ichimoku ──────────────────────────────────────────
+    atr_s              = atr(high, low, close, cfg.ATR_PERIOD)
+    rsi_s              = rsi(close, cfg.RSI_PERIOD)
+    macd_l, macd_sig_s, macd_h = macd(close, cfg.MACD_FAST, cfg.MACD_SLOW, cfg.MACD_SIGNAL)
+    di_p, di_m, adx_s  = adx_dmi(high, low, close, cfg.ADX_PERIOD)
     tenkan, kijun, senkou_a, senkou_b = ichimoku(
-        high, low,
-        cfg.ICHI_TENKAN, cfg.ICHI_KIJUN, cfg.ICHI_SENKOU, cfg.ICHI_DISP
+        high, low, cfg.ICHI_TENKAN, cfg.ICHI_KIJUN, cfg.ICHI_SENKOU, cfg.ICHI_DISP
     )
-
-    # ── Volume ────────────────────────────────────────────
     vol_ma = sma(volume, cfg.VOL_MA_PERIOD)
 
-    # ── Take last row values ──────────────────────────────
-    i = -1  # last candle
-
+    # Last values
+    i = -1
     c        = float(close.iloc[i])
     o        = float(opn.iloc[i])
     h        = float(high.iloc[i])
@@ -187,7 +159,7 @@ def analyze(symbol: str, df: pd.DataFrame) -> Optional[Signal]:
     di_pv    = float(di_p.iloc[i])
     di_mv    = float(di_m.iloc[i])
     macd_lv  = float(macd_l.iloc[i])
-    macd_sv  = float(macd_sig.iloc[i])
+    macd_sv  = float(macd_sig_s.iloc[i])
     macd_hv  = float(macd_h.iloc[i])
     macd_hv1 = float(macd_h.iloc[i-1])
     e9v      = float(e9.iloc[i])
@@ -200,118 +172,97 @@ def analyze(symbol: str, df: pd.DataFrame) -> Optional[Signal]:
     sa_v     = float(senkou_a.iloc[i]) if not pd.isna(senkou_a.iloc[i]) else c
     sb_v     = float(senkou_b.iloc[i]) if not pd.isna(senkou_b.iloc[i]) else c
     vol_v    = float(volume.iloc[i])
-    vol_ma_v = float(vol_ma.iloc[i])
+    vol_ma_v = float(vol_ma.iloc[i]) if not pd.isna(vol_ma.iloc[i]) else vol_v
 
-    if any(np.isnan(x) for x in [atr_v, rsi_v, adx_v, e200v, sa_v, sb_v, macd_hv]):
+    if any(np.isnan(x) for x in [atr_v, rsi_v, adx_v, e200v, macd_hv]):
+        return None
+    if atr_v == 0 or c == 0:
         return None
 
-    # ── Derived booleans ─────────────────────────────────
-    strong_trend  = adx_v > cfg.ADX_THRESHOLD
-    bull_trend    = c > e200v
-    bear_trend    = c < e200v
-    bull_env      = bull_trend and e50v > e200v and strong_trend and di_pv > di_mv
-    bear_env      = bear_trend and e50v < e200v and strong_trend and di_mv > di_pv
+    # Derived
+    strong_trend = adx_v > cfg.ADX_THRESHOLD
+    bull_trend   = c > e200v
+    bear_trend   = c < e200v
 
-    cloud_top    = max(sa_v, sb_v)
-    cloud_bot    = min(sa_v, sb_v)
-    above_cloud  = c > cloud_top
-    below_cloud  = c < cloud_bot
-    bull_cloud   = sa_v > sb_v
+    cloud_top   = max(sa_v, sb_v)
+    cloud_bot   = min(sa_v, sb_v)
+    above_cloud = c > cloud_top
+    below_cloud = c < cloud_bot
+    bull_cloud  = sa_v > sb_v
 
-    macd_crossover  = (macd_lv > macd_sv) and (float(macd_l.iloc[i-1]) <= float(macd_sig.iloc[i-1]))
-    macd_crossunder = (macd_lv < macd_sv) and (float(macd_l.iloc[i-1]) >= float(macd_sig.iloc[i-1]))
-    momentum_up     = macd_hv > macd_hv1 and macd_hv > 0 and macd_lv > macd_sv
-    momentum_down   = macd_hv < macd_hv1 and macd_hv < 0 and macd_lv < macd_sv
+    macd_cross_up   = (macd_lv > macd_sv) and (float(macd_l.iloc[i-1]) <= float(macd_sig_s.iloc[i-1]))
+    macd_cross_dn   = (macd_lv < macd_sv) and (float(macd_l.iloc[i-1]) >= float(macd_sig_s.iloc[i-1]))
+    momentum_up     = macd_hv > macd_hv1 and macd_lv > macd_sv
+    momentum_down   = macd_hv < macd_hv1 and macd_lv < macd_sv
 
     vol_spike = vol_v > vol_ma_v * cfg.VOL_SPIKE_MULT
 
-    # ── Price Action ──────────────────────────────────────
-    body = abs(c - o)
+    # Price action
+    body     = abs(c - o)
     up_wick  = h - max(c, o)
     dn_wick  = min(c, o) - l
-    bull_engulf = (c > o and float(close.iloc[i-1]) < float(opn.iloc[i-1]) and
-                   c > float(opn.iloc[i-1]) and o < float(close.iloc[i-1]))
-    bear_engulf = (c < o and float(close.iloc[i-1]) > float(opn.iloc[i-1]) and
-                   c < float(opn.iloc[i-1]) and o > float(close.iloc[i-1]))
-    bull_pin = dn_wick > body * 2 and dn_wick > up_wick * 2
-    bear_pin = up_wick > body * 2 and up_wick > dn_wick * 2
+    bull_engulf = (c > o and float(close.iloc[i-1]) < float(opn.iloc[i-1])
+                   and c > float(opn.iloc[i-1]) and o < float(close.iloc[i-1]))
+    bear_engulf = (c < o and float(close.iloc[i-1]) > float(opn.iloc[i-1])
+                   and c < float(opn.iloc[i-1]) and o > float(close.iloc[i-1]))
+    bull_pin = dn_wick > body * 1.5 and dn_wick > up_wick
+    bear_pin = up_wick > body * 1.5 and up_wick > dn_wick
 
-    high20    = float(high.iloc[-20:].max())
-    low20     = float(low.iloc[-20:].min())
-    brk_up    = c > float(high.iloc[-21]) and float(close.iloc[i-1]) <= float(high.iloc[-21])
-    brk_dn    = c < float(low.iloc[-21])  and float(close.iloc[i-1]) >= float(low.iloc[-21])
+    # Breakout (10 nến)
+    brk_up = c > float(high.iloc[-11:-1].max())
+    brk_dn = c < float(low.iloc[-11:-1].min())
 
-    # ── Market Structure (simple) ──────────────────────────
-    # Dùng pivot gần nhất trên chuỗi 30 nến
-    recent_high = float(high.iloc[-30:].max())
-    recent_low  = float(low.iloc[-30:].min())
+    # Market structure
+    recent_high = float(high.iloc[-20:].max())
+    recent_low  = float(low.iloc[-20:].min())
     mid_range   = (recent_high + recent_low) / 2
     ms_dir      = "bullish" if c > mid_range else "bearish"
 
-    # ── SMC Context ───────────────────────────────────────
-    smc_bull = above_cloud and bull_cloud and tenkan_v > kijun_v
-    smc_bear = below_cloud and not bull_cloud and tenkan_v < kijun_v
+    # Ichimoku context
+    smc_bull = above_cloud and tenkan_v > kijun_v
+    smc_bear = below_cloud and tenkan_v < kijun_v
 
-    # ── Scoring: BUY criteria ─────────────────────────────
-    crit_buy_ema   = (e9v > e21v and e21v > e55v) or macd_crossover
-    crit_buy_rsi   = cfg.RSI_OS < rsi_v < cfg.RSI_BUY_MAX
-    crit_buy_macd  = macd_crossover or (macd_lv > macd_sv and macd_lv < 0) or momentum_up
-    crit_buy_vol   = not cfg.VOL_SPIKE_MULT or vol_spike
-    crit_buy_pa    = brk_up or bull_engulf or bull_pin
+    # ── BUY scoring (mỗi tiêu chí = 1 điểm, tổng 10) ────
+    s_b1  = 1 if e9v > e21v else 0                          # EMA fast align
+    s_b2  = 1 if bull_trend else 0                          # Above EMA200
+    s_b3  = 1 if e50v > e200v else 0                        # EMA50 > EMA200
+    s_b4  = 1 if 30 < rsi_v < 65 else 0                    # RSI vùng hợp lệ (nới rộng)
+    s_b5  = 1 if (macd_cross_up or momentum_up) else 0     # MACD
+    s_b6  = 1 if vol_spike else 0                           # Volume spike
+    s_b7  = 1 if (bull_engulf or bull_pin or brk_up) else 0 # Price action
+    s_b8  = 1 if above_cloud else 0                         # Ichimoku
+    s_b9  = 1 if ms_dir == "bullish" else 0                 # Market structure
+    s_b10 = 1 if (strong_trend and di_pv > di_mv) else 0   # ADX
 
-    buy_score = (int(crit_buy_ema) + int(crit_buy_rsi) +
-                 int(crit_buy_macd) + int(crit_buy_vol) + int(crit_buy_pa))
+    mbuy = s_b1+s_b2+s_b3+s_b4+s_b5+s_b6+s_b7+s_b8+s_b9+s_b10
 
-    # ── Scoring: SELL criteria ────────────────────────────
-    crit_sell_ema  = (e9v < e21v and e21v < e55v) or macd_crossunder
-    crit_sell_rsi  = cfg.RSI_SELL_MIN < rsi_v < cfg.RSI_OB
-    crit_sell_macd = macd_crossunder or (macd_lv < macd_sv and macd_lv > 0) or momentum_down
-    crit_sell_vol  = not cfg.VOL_SPIKE_MULT or vol_spike
-    crit_sell_pa   = brk_dn or bear_engulf or bear_pin
+    # ── SELL scoring ──────────────────────────────────────
+    s_s1  = 1 if e9v < e21v else 0
+    s_s2  = 1 if bear_trend else 0
+    s_s3  = 1 if e50v < e200v else 0
+    s_s4  = 1 if 35 < rsi_v < 70 else 0                    # RSI vùng bán (nới rộng)
+    s_s5  = 1 if (macd_cross_dn or momentum_down) else 0
+    s_s6  = 1 if vol_spike else 0
+    s_s7  = 1 if (bear_engulf or bear_pin or brk_dn) else 0
+    s_s8  = 1 if below_cloud else 0
+    s_s9  = 1 if ms_dir == "bearish" else 0
+    s_s10 = 1 if (strong_trend and di_mv > di_pv) else 0
 
-    sell_score = (int(crit_sell_ema) + int(crit_sell_rsi) +
-                  int(crit_sell_macd) + int(crit_sell_vol) + int(crit_sell_pa))
+    msell = s_s1+s_s2+s_s3+s_s4+s_s5+s_s6+s_s7+s_s8+s_s9+s_s10
 
-    # ── Master score (0-10) ───────────────────────────────
-    mbuy  = (int(crit_buy_ema) + int(crit_buy_rsi) + int(crit_buy_macd) +
-             int(crit_buy_vol) + int(crit_buy_pa) +
-             int(smc_bull) + int(ms_dir == "bullish") +
-             int(momentum_up) + int(above_cloud) + int(bull_trend))
+    # ── Quyết định tín hiệu ──────────────────────────────
+    min_score = cfg.MIN_MASTER_SCORE   # mặc định 4 (đã sửa config)
 
-    msell = (int(crit_sell_ema) + int(crit_sell_rsi) + int(crit_sell_macd) +
-             int(crit_sell_vol) + int(crit_sell_pa) +
-             int(smc_bear) + int(ms_dir == "bearish") +
-             int(momentum_down) + int(below_cloud) + int(bear_trend))
-
-    # ── Final signal decision ─────────────────────────────
-    raw_buy  = (bull_env and rsi_v < cfg.RSI_BUY_MAX and rsi_v > 30
-                and momentum_up and c > o and vol_spike
-                and above_cloud and ms_dir == "bullish")
-    raw_sell = (bear_env and rsi_v > cfg.RSI_SELL_MIN and rsi_v < 70
-                and momentum_down and c < o and vol_spike
-                and below_cloud and ms_dir == "bearish")
-
-    lenh_tong_buy  = mbuy  >= cfg.MIN_MASTER_SCORE and mbuy  > msell
-    lenh_tong_sell = msell >= cfg.MIN_MASTER_SCORE and msell > mbuy
-
-    has_buy  = (raw_buy  or lenh_tong_buy)  and buy_score  >= cfg.MIN_BUY_SCORE
-    has_sell = (raw_sell or lenh_tong_sell) and sell_score >= cfg.MIN_SELL_SCORE
+    has_buy  = mbuy  >= min_score and mbuy  > msell
+    has_sell = msell >= min_score and msell > mbuy
 
     if not has_buy and not has_sell:
         return None
 
-    # Chọn hướng mạnh hơn
-    if has_buy and has_sell:
-        if mbuy >= msell:
-            has_sell = False
-        else:
-            has_buy = False
-
     direction = "BUY" if has_buy else "SELL"
-    score     = mbuy if has_buy else msell
-    bs        = buy_score if has_buy else sell_score
+    score     = mbuy  if has_buy else msell
 
-    # ── TP / SL ───────────────────────────────────────────
+    # TP / SL
     if direction == "BUY":
         sl = c - atr_v * cfg.ATR_SL_MULT
         tp = c + atr_v * cfg.ATR_SL_MULT * cfg.RR_RATIO
@@ -319,34 +270,25 @@ def analyze(symbol: str, df: pd.DataFrame) -> Optional[Signal]:
         sl = c + atr_v * cfg.ATR_SL_MULT
         tp = c - atr_v * cfg.ATR_SL_MULT * cfg.RR_RATIO
 
-    rr = cfg.RR_RATIO
-
-    # ── Cloud label ───────────────────────────────────────
+    # Labels
     cloud_lbl = "ABOVE ☁" if above_cloud else ("BELOW ☁" if below_cloud else "IN ☁")
-
-    # ── EMA alignment ─────────────────────────────────────
-    if e9v > e21v > e55v:
-        ema_align = "BULL"
-    elif e9v < e21v < e55v:
-        ema_align = "BEAR"
-    else:
-        ema_align = "MIX"
-
-    strength = ("⚡ SIÊU MẠNH" if score >= 9 else
-                "🔥 CỰC MẠNH" if score >= 8 else
-                "💪 MẠNH"     if score >= 7 else
-                "📌 KHÁ"      if score >= 6 else "⏳ YẾU")
+    ema_align = "BULL 📈" if e9v > e21v > e55v else ("BEAR 📉" if e9v < e21v < e55v else "MIX ↔")
+    strength  = ("⚡ SIÊU MẠNH" if score >= 9 else
+                 "🔥 CỰC MẠNH" if score >= 8 else
+                 "💪 MẠNH"     if score >= 7 else
+                 "📌 KHÁ"      if score >= 6 else
+                 "✅ ĐỦ ĐIỀU KIỆN" if score >= 4 else "⏳ YẾU")
 
     return Signal(
         symbol    = symbol,
         direction = direction,
         score     = score,
-        buy_score = buy_score,
-        sell_score= sell_score,
+        buy_score = mbuy,
+        sell_score= msell,
         close     = c,
         tp        = tp,
         sl        = sl,
-        rr        = rr,
+        rr        = cfg.RR_RATIO,
         rsi_val   = rsi_v,
         adx_val   = adx_v,
         macd_hist = macd_hv,
