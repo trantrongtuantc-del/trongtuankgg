@@ -24,9 +24,3 @@ git push -u origin main --force
 └── README.md
 ```
 
-**Sai** (đang bị như này):
-```
-/ (root)
-└── crypto-scanner/
-    ├── main.py      ← Railway không thấy
-    └── ...
