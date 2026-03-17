@@ -166,7 +166,7 @@ def format_top(top_coins: list) -> str:
         return "⚠️ Không tìm thấy coin nào đồng thuận cả 1H lẫn 1D."
 
     lines = [
-        "🏆 *TOP 10 COIN — Đồng thuận 1H + 1D*",
+        "🏆 *TOP 30 COIN — Đồng thuận 1H + 1D*",
         "━━━━━━━━━━━━━━━━━━━━",
     ]
 
