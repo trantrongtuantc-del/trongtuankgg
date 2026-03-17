@@ -558,7 +558,7 @@ class CryptoScanner:
         r1d = await self._scan_one(symbol, '1d')
         return {"1h": r1h, "1d": r1d}
 
-    def get_top_coins(self, results_1h: list, results_1d: list, n=10) -> list:
+    def get_top_coins(self, results_1h: list, results_1d: list, n=30) -> list:
         """Tìm coin có tín hiệu đồng thuận cả 1H lẫn 1D"""
         sym_1h = {r['symbol']: r for r in results_1h}
         sym_1d = {r['symbol']: r for r in results_1d}
