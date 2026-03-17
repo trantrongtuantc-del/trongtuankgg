@@ -16,8 +16,8 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from scanner   import CryptoScanner
-from formatter import format_results, format_top, format_coin
+from crypto_scanner import CryptoScanner
+from formatter      import format_results, format_top, format_coin
 from config    import Config
 
 logging.basicConfig(
@@ -83,7 +83,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*1. Scan thị trường*\n"
         "`/scan1h` — Scan top 500 coin, lọc tín hiệu V8 khung 1H\n"
         "`/scan1d` — Scan top 500 coin, lọc tín hiệu V8 khung 1D\n"
-        "`/top` — Top 10 coin có tín hiệu đồng chiều cả 1H + 1D\n\n"
+        "`/top` — Top 30 coin có tín hiệu đồng chiều cả 1H + 1D\n\n"
         "*2. Scan coin riêng lẻ*\n"
         "`/symbol BTCUSDT` — Phân tích chi tiết 1 coin (cả 1H + 1D)\n\n"
         "*3. Bộ lọc*\n"
@@ -138,7 +138,7 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
     msg = await update.message.reply_text(
-        "⏳ Đang scan cả *1H* + *1D* để tìm top 10...\n_Mất ~5 phút_",
+        "⏳ Đang scan cả *1H* + *1D* để tìm top 30...\n_Mất ~5 phút_",
         parse_mode=ParseMode.MARKDOWN
     )
     try:
@@ -147,7 +147,7 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             scanner.scan(timeframe="1h", limit=limit),
             scanner.scan(timeframe="1d", limit=limit),
         )
-        top  = scanner.get_top_coins(r1h, r1d, n=10)
+        top  = scanner.get_top_coins(r1h, r1d, n=30)
         text = format_top(top)
         await msg.delete()
         await send_long(update, text)
@@ -326,7 +326,7 @@ async def post_init(app: Application):
         BotCommand("start",     "Khởi động bot"),
         BotCommand("scan1h",    "Scan 500 coin khung 1H"),
         BotCommand("scan1d",    "Scan 500 coin khung 1D"),
-        BotCommand("top",       "Top 10 coin 1H+1D"),
+        BotCommand("top",       "Top 30 coin 1H+1D"),
         BotCommand("symbol",    "Phân tích 1 coin cụ thể"),
         BotCommand("alert",     "Bật/tắt cảnh báo tự động"),
         BotCommand("status",    "Trạng thái bot"),
