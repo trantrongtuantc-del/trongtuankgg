@@ -713,68 +713,6 @@ async def post_init(app: Application):
     logger.info("Unified Bot ready ✅")
 
 
-def main():
-    if not Config.BOT_TOKEN:
-        raise ValueError("BOT_TOKEN chưa set!")
-
-    app = (
-        Application.builder()
-        .token(Config.BOT_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-
-    # V8
-    app.add_handler(CommandHandler("scan1h",   cmd_scan1h))
-    app.add_handler(CommandHandler("scan1d",   cmd_scan1d))
-    app.add_handler(CommandHandler("top",      cmd_top))
-    app.add_handler(CommandHandler("v8symbol", cmd_v8symbol))
-    # S&D
-    app.add_handler(CommandHandler("demand",   cmd_demand))
-    app.add_handler(CommandHandler("supply",   cmd_supply))
-    app.add_handler(CommandHandler("fresh",    cmd_fresh))
-    app.add_handler(CommandHandler("near",     cmd_near))
-    app.add_handler(CommandHandler("inside",   cmd_inside))
-    app.add_handler(CommandHandler("sdsymbol", cmd_sdsymbol))
-    # Combined
-    app.add_handler(CommandHandler("symbol",   cmd_symbol))
-    app.add_handler(CommandHandler("summary",  cmd_summary))
-    app.add_handler(CommandHandler("alert",    cmd_alert))
-    app.add_handler(CommandHandler("setlimit", cmd_setlimit))
-    app.add_handler(CommandHandler("tf",       cmd_tf))
-    app.add_handler(CommandHandler("strength", cmd_strength))
-    app.add_handler(CommandHandler("status",   cmd_status))
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("help",     cmd_help))
-    app.add_handler(CommandHandler("entry",       cmd_entry))
-    app.add_handler(CommandHandler("buys",        cmd_buys))
-    app.add_handler(CommandHandler("sells",       cmd_sells))
-    app.add_handler(CommandHandler("best",        cmd_best))
-    app.add_handler(CommandHandler("entrysymbol", cmd_entrysymbol))
-    app.add_handler(CommandHandler("setentry",    cmd_setentry))
-    app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
-
-    if Config.WEBHOOK_URL:
-        logger.info(f"Webhook mode — port {Config.PORT}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=Config.PORT,
-            webhook_url=f"{Config.WEBHOOK_URL}/webhook",
-            url_path="webhook",
-        )
-    else:
-        logger.info("Polling mode (dev)...")
-        app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == "__main__":
-    main()
-
-
-# ══════════════════════════════════════════════════════════
-# ── ENTRY COMMANDS ────────────────────────────────────────
-# ══════════════════════════════════════════════════════════
-
 async def cmd_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Scan toàn market tìm điểm vào lệnh BUY + SELL"""
     if not allowed(update): return
@@ -930,3 +868,59 @@ async def entry_alert_job(ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Entry alert error: {e}")
 
+def main():
+    if not Config.BOT_TOKEN:
+        raise ValueError("BOT_TOKEN chưa set!")
+
+    app = (
+        Application.builder()
+        .token(Config.BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    # V8
+    app.add_handler(CommandHandler("scan1h",   cmd_scan1h))
+    app.add_handler(CommandHandler("scan1d",   cmd_scan1d))
+    app.add_handler(CommandHandler("top",      cmd_top))
+    app.add_handler(CommandHandler("v8symbol", cmd_v8symbol))
+    # S&D
+    app.add_handler(CommandHandler("demand",   cmd_demand))
+    app.add_handler(CommandHandler("supply",   cmd_supply))
+    app.add_handler(CommandHandler("fresh",    cmd_fresh))
+    app.add_handler(CommandHandler("near",     cmd_near))
+    app.add_handler(CommandHandler("inside",   cmd_inside))
+    app.add_handler(CommandHandler("sdsymbol", cmd_sdsymbol))
+    # Combined
+    app.add_handler(CommandHandler("symbol",   cmd_symbol))
+    app.add_handler(CommandHandler("summary",  cmd_summary))
+    app.add_handler(CommandHandler("alert",    cmd_alert))
+    app.add_handler(CommandHandler("setlimit", cmd_setlimit))
+    app.add_handler(CommandHandler("tf",       cmd_tf))
+    app.add_handler(CommandHandler("strength", cmd_strength))
+    app.add_handler(CommandHandler("status",   cmd_status))
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("entry",       cmd_entry))
+    app.add_handler(CommandHandler("buys",        cmd_buys))
+    app.add_handler(CommandHandler("sells",       cmd_sells))
+    app.add_handler(CommandHandler("best",        cmd_best))
+    app.add_handler(CommandHandler("entrysymbol", cmd_entrysymbol))
+    app.add_handler(CommandHandler("setentry",    cmd_setentry))
+    app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
+
+    if Config.WEBHOOK_URL:
+        logger.info(f"Webhook mode — port {Config.PORT}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=Config.PORT,
+            webhook_url=f"{Config.WEBHOOK_URL}/webhook",
+            url_path="webhook",
+        )
+    else:
+        logger.info("Polling mode (dev)...")
+        app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
