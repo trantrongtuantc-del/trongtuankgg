@@ -34,7 +34,7 @@ from entry_engine    import EntrySignal
 from signal_formatter import (
     format_signal, format_signal_short,
     format_signal_list, format_alert,
-    format_market_overview, _win_prob
+    format_market_overview, win_prob
 )
 
 logging.basicConfig(
