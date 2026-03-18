@@ -8,8 +8,11 @@ from entry_engine import EntrySignal
 def quality_emoji(q: str) -> str:
     return {"A+": "💎", "A": "🥇", "B": "🥈", "C": "🥉"}.get(q, "⚪")
 
-def direction_emoji(d: str) -> str:
-    return "📗 MUA (BUY)" if d == "BUY" else "📕 BÁN (SELL)"
+def direction_emoji(d: str, zone_type: str) -> str:
+    if d == "BUY":
+        return "📗 MUA (BUY) tại Demand/Support"
+    else:
+        return "📕 BÁN (SELL) tại Supply/Resistance"
 
 def conf_bar(score: int) -> str:
     return "█" * score + "░" * (6 - score)
@@ -36,7 +39,7 @@ def tf_up(tf: str) -> str:
 def format_entry(sig: EntrySignal, rank: int = 0) -> str:
     rank_s = f"#{rank} " if rank else ""
     q_em   = quality_emoji(sig.quality)
-    dir_em = direction_emoji(sig.direction)
+    dir_em = direction_emoji(sig.direction, sig.zone_type)
     is_buy = sig.direction == "BUY"
 
     # Tính % SL và TP từ entry
@@ -63,7 +66,7 @@ def format_entry(sig: EntrySignal, rank: int = 0) -> str:
     lines += [
         f"━━━━━━━━━━━━━━━━━━━━",
         # Zone range
-        f"📦 Zone    : `{sig.zone_bot:.6g}` — `{sig.zone_top:.6g}`",
+        f"📦 Zone    : `{'Demand/Support' if sig.zone_type == 'demand' else 'Supply/Resistance'}` → `{sig.zone_bot:.6g}` — `{sig.zone_top:.6g}`",
         f"💰 Giá     : `{sig.close_now:.6g}`  cách `{sig.dist_pct:.2f}%`",
         f"━━━━━━━━━━━━━━━━━━━━",
         # Confirmations
