@@ -49,7 +49,7 @@ def dist_emoji(dist: float) -> str:
 def format_zone(z: Zone, rank: int = 0) -> str:
     is_dem = z.zone_type == "demand"
     emoji  = "📗" if is_dem else "📕"
-    arrow  = "▲ DEMAND" if is_dem else "▼ SUPPLY"
+    arrow  = "▲ DEMAND (Support)" if is_dem else "▼ SUPPLY (Resistance)"
     rank_s = f"#{rank} " if rank else ""
 
     lines = [
@@ -155,12 +155,12 @@ def format_summary(zones: list[Zone]) -> str:
     ]
 
     if top_d:
-        lines.append("📗 *Top Demand mạnh nhất:*")
+        lines.append("📗 *Top Demand (Support) mạnh nhất:*")
         for z in top_d:
             lines.append(f"  • `{z.symbol}` [{tf_label(z.timeframe)}] {z.pattern} S:{z.strength} dist:{z.dist_pct:.1f}%")
 
     if top_s:
-        lines.append("📕 *Top Supply mạnh nhất:*")
+        lines.append("📕 *Top Supply (Resistance) mạnh nhất:*")
         for z in top_s:
             lines.append(f"  • `{z.symbol}` [{tf_label(z.timeframe)}] {z.pattern} S:{z.strength} dist:{z.dist_pct:.1f}%")
 
