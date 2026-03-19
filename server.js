@@ -5,9 +5,9 @@
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
-const { processSignal } = require('./src/signalProcessor');
-const { bot, sendAlert } = require('./src/telegramBot');
-const store   = require('./src/signalStore');
+const { processSignal } = require('./signalProcessor');
+const { bot, sendAlert } = require('./telegramBot');
+const store   = require('./signalStore');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
