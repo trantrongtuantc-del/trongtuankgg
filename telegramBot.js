@@ -13,7 +13,14 @@ if (!TOKEN) {
 }
 
 const bot = TOKEN
-  ? new TelegramBot(TOKEN, { polling: true })
+  ? new TelegramBot(TOKEN, {
+      polling: {
+        interval: 1000,
+        autoStart: true,
+        params: { timeout: 10, allowed_updates: ['message'] }
+      },
+      dropPendingUpdates: true
+    })
   : null;
 
 // ── Kiểm tra quyền admin ──────────────────────────────────
