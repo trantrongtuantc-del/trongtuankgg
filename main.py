@@ -24,10 +24,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ══════════════════════════════════════════════════════════
-# CONFIG
-# ══════════════════════════════════════════════════════════
-
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 ADMIN_ID         = os.getenv("ADMIN_ID", TELEGRAM_CHAT_ID)
@@ -80,10 +76,6 @@ def _is_duplicate(symbol, direction):
 def _mark_sent(symbol, direction):
     _sent_cache[f"{symbol}_{direction}"] = datetime.now(timezone.utc)
 
-# ══════════════════════════════════════════════════════════
-# CORE SCAN
-# ══════════════════════════════════════════════════════════
-
 def run_scan(manual=False, reply_chat=None):
     if STATE["paused"] and not manual:
         logger.info("Bot pause — skip auto scan")
@@ -112,11 +104,9 @@ def run_scan(manual=False, reply_chat=None):
         config    = get_config()
 
         buy_signals, sell_signals, errors = [], [], 0
-        for sym, data in data_map.items():
-            df = data["main"]
+        for sym, df in data_map.items():
             try:
-                d4h = data.get("4h"); d1d = data.get("1d")
-                result = calc_lenh_cuoi(df, config, df_4h=d4h, df_1d=d1d)
+                result = calc_lenh_cuoi(df, config)
                 if result["valid"] and result["direction"]:
                     (buy_signals if result["direction"] == "BUY" else sell_signals).append((sym, result))
             except Exception as e:
@@ -156,10 +146,6 @@ def run_scan(manual=False, reply_chat=None):
         send_telegram(TELEGRAM_TOKEN, notify_chat, f"Loi scan: {str(e)[:200]}")
     finally:
         STATE["scanning"] = False
-
-# ══════════════════════════════════════════════════════════
-# COMMAND HANDLERS
-# ══════════════════════════════════════════════════════════
 
 def cmd_help(chat_id, args):
     send_telegram(TELEGRAM_TOKEN, chat_id,
@@ -309,10 +295,6 @@ COMMANDS = {
     "/scan": cmd_scan,
 }
 
-# ══════════════════════════════════════════════════════════
-# POLLING
-# ══════════════════════════════════════════════════════════
-
 def is_authorized(chat_id):
     return str(chat_id) in [str(ADMIN_ID), str(TELEGRAM_CHAT_ID)]
 
@@ -352,10 +334,6 @@ def poll_commands():
             pass
         except Exception as e:
             logger.error(f"Poll: {e}"); time.sleep(5)
-
-# ══════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════
 
 def main():
     logger.info("Bot Lenh Cuoi starting...")
