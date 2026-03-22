@@ -112,9 +112,11 @@ def run_scan(manual=False, reply_chat=None):
         config    = get_config()
 
         buy_signals, sell_signals, errors = [], [], 0
-        for sym, df in data_map.items():
+        for sym, data in data_map.items():
+            df = data["main"]
             try:
-                result = calc_lenh_cuoi(df, config)
+                d4h = data.get("4h"); d1d = data.get("1d")
+                result = calc_lenh_cuoi(df, config, df_4h=d4h, df_1d=d1d)
                 if result["valid"] and result["direction"]:
                     (buy_signals if result["direction"] == "BUY" else sell_signals).append((sym, result))
             except Exception as e:
