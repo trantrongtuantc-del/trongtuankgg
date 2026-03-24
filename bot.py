@@ -21,8 +21,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import config
 import storage
 from data_fetcher import normalize_symbol, close_all, EXCHANGE
-from scanner     import scan_symbol, scan_watchlist
-from formatter   import format_mtf_result, format_scan_summary, format_alert
+from scanner     import scan_symbol, scan_watchlist, scan_market
+from formatter   import format_mtf_result, format_scan_summary, format_alert, format_market_scan
 
 # ──────────────────────────────────────────────
 # Logging
@@ -72,6 +72,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📋 *Lệnh cơ bản:*\n"
         "/check `<coin>` — kiểm tra 1 coin\n"
         "/scan — scan toàn bộ watchlist\n"
+        "/marketscan — quét toàn thị trường (top 50)\n"
+        "/topscan `<N>` — quét top N coin theo volume\n"
         "/watch `<coin>` — thêm vào watchlist\n"
         "/unwatch `<coin>` — xóa khỏi watchlist\n"
         "/list — xem watchlist\n"
@@ -96,6 +98,11 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = (
         "📖 *HƯỚNG DẪN CHI TIẾT*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "*🌐 Quét toàn thị trường:*\n"
+        "`/marketscan` — quét top 50 coin theo volume\n"
+        "`/marketscan strong` — chỉ hiện tín hiệu 3TF mạnh\n"
+        "`/topscan 100` — quét top 100 coin\n"
+        "`/topscan 200 strong` — top 200, chỉ tín hiệu mạnh\n\n"
         "*🔍 Kiểm tra coin:*\n"
         "`/check BTCUSDT` — phân tích MTF\n"
         "`/check BTC/USDT` — cũng được\n\n"
@@ -391,6 +398,106 @@ async def cmd_unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# /marketscan [strong] — quét toàn thị trường
+# /topscan [N] [strong]  — top N theo volume
+# ──────────────────────────────────────────────
+MARKET_SCAN_DEFAULT = 50
+MARKET_SCAN_MAX     = 200
+
+@require_auth
+async def cmd_marketscan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /marketscan          → top 50 USDT, hiện tất cả
+    /marketscan strong   → top 50 USDT, chỉ tín hiệu 3TF mạnh
+    """
+    strong_only = bool(ctx.args and ctx.args[0].lower() == "strong")
+    limit       = MARKET_SCAN_DEFAULT
+    ex_name     = await storage.get_exchange()
+
+    msg_wait = await update.message.reply_text(
+        f"⏳ Đang quét top {limit} coin trên thị trường...\n"
+        f"_(Có thể mất 30–60 giây)_",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    try:
+        results = await scan_market(
+            limit=limit,
+            exchange_name=ex_name,
+            concurrency=10,
+            strong_only=strong_only,
+        )
+        await msg_wait.delete()
+
+        if not results:
+            await update.message.reply_text(
+                "❌ Không lấy được dữ liệu thị trường. Thử lại sau."
+            )
+            return
+
+        msgs = format_market_scan(results, limit=limit, strong_only=strong_only)
+        for m in msgs:
+            await update.message.reply_text(m, parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        await msg_wait.delete()
+        logger.error(f"cmd_marketscan error: {e}")
+        await update.message.reply_text(f"❌ Lỗi khi scan thị trường: {e}")
+
+
+@require_auth
+async def cmd_topscan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /topscan 100         → scan top 100 coin
+    /topscan 100 strong  → chỉ tín hiệu 3TF mạnh
+    /topscan strong      → top 50, chỉ tín hiệu mạnh
+    """
+    limit       = MARKET_SCAN_DEFAULT
+    strong_only = False
+
+    for arg in (ctx.args or []):
+        if arg.lower() == "strong":
+            strong_only = True
+        else:
+            try:
+                n = int(arg)
+                limit = max(10, min(n, MARKET_SCAN_MAX))
+            except ValueError:
+                pass
+
+    ex_name  = await storage.get_exchange()
+    msg_wait = await update.message.reply_text(
+        f"⏳ Đang quét top *{limit}* coin theo volume...\n"
+        f"_(Có thể mất {limit // 10 * 10}–{limit} giây)_",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    try:
+        results = await scan_market(
+            limit=limit,
+            exchange_name=ex_name,
+            concurrency=10,
+            strong_only=strong_only,
+        )
+        await msg_wait.delete()
+
+        if not results:
+            await update.message.reply_text(
+                "❌ Không lấy được dữ liệu. Thử lại sau."
+            )
+            return
+
+        msgs = format_market_scan(results, limit=limit, strong_only=strong_only)
+        for m in msgs:
+            await update.message.reply_text(m, parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        await msg_wait.delete()
+        logger.error(f"cmd_topscan error: {e}")
+        await update.message.reply_text(f"❌ Lỗi khi scan: {e}")
+
+
+# ──────────────────────────────────────────────
 # Auto-scan job (APScheduler)
 # ──────────────────────────────────────────────
 _app_ref = None   # global ref để job gửi tin
@@ -500,6 +607,8 @@ async def on_startup(app: Application):
         BotCommand("alert",       "Bật/tắt auto-scan: /alert on|off"),
         BotCommand("interval",    "Chu kỳ scan phút: /interval 15"),
         BotCommand("exchange",    "Đổi exchange: /exchange binance"),
+        BotCommand("marketscan",  "Quét toàn TT: /marketscan [strong]"),
+        BotCommand("topscan",     "Quét top N coin: /topscan [N] [strong]"),
         BotCommand("adx",         "Ngưỡng ADX: /adx 22"),
     ]
     await app.bot.set_my_commands(commands)
@@ -560,6 +669,8 @@ def main():
         ("interval",    cmd_interval),
         ("exchange",    cmd_exchange),
         ("adx",         cmd_adx),
+        ("marketscan",  cmd_marketscan),
+        ("topscan",     cmd_topscan),
         ("subscribe",   cmd_subscribe),
         ("unsubscribe", cmd_unsubscribe),
     ]
