@@ -104,6 +104,75 @@ def format_scan_summary(results: list[MTFResult]) -> str:
     return "\n".join(lines)
 
 
+def format_market_scan(results: list[MTFResult], limit: int, strong_only: bool = False) -> list[str]:
+    """
+    Tóm tắt market scan — trả về list[str] (nhiều message nếu quá dài).
+    Telegram giới hạn 4096 ký tự / message → tự chia nhỏ.
+    """
+    buy_list  = [r for r in results if r.align_all_bull]
+    sell_list = [r for r in results if r.align_all_bear]
+    partial   = [r for r in results if not r.align_all_bull and not r.align_all_bear]
+
+    header_lines = [
+        f"🌐 *MARKET SCAN — TOP {limit} USDT (Binance)*",
+        f"{'🔍 Chỉ tín hiệu mạnh' if strong_only else '📊 Toàn bộ thị trường'}",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+    footer = (
+        f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔢 Đã scan: {len(results)} coin  |  "
+        f"🟢 MUA: {len(buy_list)}  🔴 BÁN: {len(sell_list)}  ⚪ Chờ: {len(partial)}"
+    )
+
+    body_lines: list[str] = []
+
+    if buy_list:
+        body_lines.append("🟢 *3TF ĐỒNG THUẬN MUA:*")
+        for r in buy_list:
+            b15 = r.tf15.bull if r.tf15 else 0
+            b1h = r.tf1h.bull if r.tf1h else 0
+            b4h = r.tf4h.bull if r.tf4h else 0
+            body_lines.append(
+                f"  🚀 `{r.symbol}`  💰{r.price:,.4f}\n"
+                f"      15m:{b15}/5  1H:{b1h}/5  4H:{b4h}/5"
+            )
+        body_lines.append("")
+
+    if sell_list:
+        body_lines.append("🔴 *3TF ĐỒNG THUẬN BÁN:*")
+        for r in sell_list:
+            b15 = r.tf15.bear if r.tf15 else 0
+            b1h = r.tf1h.bear if r.tf1h else 0
+            b4h = r.tf4h.bear if r.tf4h else 0
+            body_lines.append(
+                f"  🔻 `{r.symbol}`  💰{r.price:,.4f}\n"
+                f"      15m:{b15}/5  1H:{b1h}/5  4H:{b4h}/5"
+            )
+        body_lines.append("")
+
+    if not strong_only and partial:
+        body_lines.append("⚪ *Đồng thuận 2/3 TF:*")
+        partial_2 = [r for r in partial if r.align_score == 2]
+        for r in partial_2[:15]:  # chỉ hiện top 15 để không quá dài
+            s15 = tf_label(r.tf15.bull if r.tf15 else 0, r.tf15.bear if r.tf15 else 0)
+            s1h = tf_label(r.tf1h.bull if r.tf1h else 0, r.tf1h.bear if r.tf1h else 0)
+            s4h = tf_label(r.tf4h.bull if r.tf4h else 0, r.tf4h.bear if r.tf4h else 0)
+            body_lines.append(f"  • `{r.symbol}` 15m:{s15} 1H:{s1h} 4H:{s4h}")
+
+    # Chia thành nhiều message nếu > 3800 ký tự
+    messages: list[str] = []
+    current = "\n".join(header_lines) + "\n"
+    for line in body_lines:
+        if len(current) + len(line) + len(footer) + 5 > 3800:
+            messages.append(current)
+            current = ""
+        current += line + "\n"
+    current += footer
+    messages.append(current)
+
+    return messages
+
+
 def format_alert(r: MTFResult) -> str:
     """Message ngắn gọn cho auto-alert."""
     if r.align_all_bull:
