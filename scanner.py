@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import TF_15M, TF_1H, TF_4H
-from data_fetcher import fetch_ohlcv, normalize_symbol, EXCHANGE
+from data_fetcher import fetch_ohlcv, normalize_symbol, get_top_symbols_by_volume, EXCHANGE
 from indicators import calc_tf_score, tf_label, tf_bar, ichi_label
 
 logger = logging.getLogger(__name__)
@@ -225,3 +225,47 @@ async def scan_watchlist(watchlist: list[str],
     tasks   = [scan_symbol(s, exchange_name) for s in watchlist]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     return [r for r in results if r and not isinstance(r, Exception)]
+
+
+async def scan_market(
+    limit: int = 50,
+    exchange_name: str = EXCHANGE,
+    concurrency: int = 10,
+    strong_only: bool = False,
+) -> list[MTFResult]:
+    """
+    Quét toàn bộ thị trường: lấy top <limit> coin theo volume rồi scan MTF.
+    concurrency: số coin xử lý song song (tránh rate-limit).
+    strong_only: nếu True chỉ trả về coin có tín hiệu 3TF mạnh.
+    """
+    symbols = await get_top_symbols_by_volume(limit=limit, exchange_name=exchange_name)
+    if not symbols:
+        logger.warning("scan_market: không lấy được danh sách symbols")
+        return []
+
+    results: list[MTFResult] = []
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _safe_scan(sym: str) -> Optional[MTFResult]:
+        async with sem:
+            return await scan_symbol(sym, exchange_name)
+
+    tasks = [_safe_scan(s) for s in symbols]
+    raw   = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for r in raw:
+        if r and not isinstance(r, Exception):
+            if strong_only and not r.is_strong_signal():
+                continue
+            results.append(r)
+
+    # Sắp xếp: strong signal trước, rồi theo align_score
+    results.sort(
+        key=lambda x: (
+            x.is_strong_signal(),
+            x.align_score,
+            x.tf4h.bull if x.tf4h else 0,
+        ),
+        reverse=True,
+    )
+    return results
