@@ -16,6 +16,7 @@ ALLOWED_USERS: set[int] = {int(x) for x in _raw.split(",") if x.strip().isdigit(
 TF_15M  = "15m"
 TF_1H   = "1h"
 TF_4H   = "4h"
+TF_1D   = "1d"
 
 # Ichimoku params
 TENKAN_P  = 9
