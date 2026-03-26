@@ -42,7 +42,7 @@ def format_mtf_result(r: MTFResult, show_detail: bool = True) -> str:
         "━━━━━━━━━━━━━━━━━━━━",
     ]
 
-    for tf, name in [(r.tf15, "15m"), (r.tf1h, "1H"), (r.tf4h, "4H")]:
+    for tf, name in [(r.tf15, "15m"), (r.tf1h, "1H"), (r.tf4h, "4H"), (r.tf1d, "1D")]:
         lines.append(_tf_row(tf, name))
         lines.append("─────────────────────")
 
@@ -59,6 +59,7 @@ def format_mtf_result(r: MTFResult, show_detail: bool = True) -> str:
 
     lines.append(pair_line(r.align_15m_1h, r.conflict_15m_1h, "15m↔1H"))
     lines.append(pair_line(r.align_1h_4h,  r.conflict_1h_4h,  "1H↔4H"))
+    lines.append(pair_line(r.align_4h_1d,  r.conflict_4h_1d,  "4H↔1D"))
     lines.append(pair_line(r.align_15m_4h, r.conflict_15m_4h, "15m↔4H"))
 
     # Conflict
@@ -97,7 +98,8 @@ def format_scan_summary(results: list[MTFResult]) -> str:
             s15  = tf_label(r.tf15.bull if r.tf15 else 0, r.tf15.bear if r.tf15 else 0)
             s1h  = tf_label(r.tf1h.bull if r.tf1h else 0, r.tf1h.bear if r.tf1h else 0)
             s4h  = tf_label(r.tf4h.bull if r.tf4h else 0, r.tf4h.bear if r.tf4h else 0)
-            lines.append(f"  • `{r.symbol}` 15m:{s15} 1H:{s1h} 4H:{s4h}")
+            s1d  = tf_label(r.tf1d.bull if r.tf1d else 0, r.tf1d.bear if r.tf1d else 0)
+            lines.append(f"  • `{r.symbol}` 15m:{s15} 1H:{s1h} 4H:{s4h} 1D:{s1d}")
 
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"🔢 Tổng: {len(results)} coin  |  MUA: {len(buy_list)}  BÁN: {len(sell_list)}")
@@ -115,7 +117,7 @@ def format_market_scan(results: list[MTFResult], limit: int, strong_only: bool =
 
     header_lines = [
         f"🌐 *MARKET SCAN — TOP {limit} USDT (Binance)*",
-        f"{'🔍 Chỉ tín hiệu mạnh' if strong_only else '📊 Toàn bộ thị trường'}",
+        f"{'🔍 Chỉ tín hiệu mạnh 4TF' if strong_only else '📊 Toàn bộ thị trường'}",
         "━━━━━━━━━━━━━━━━━━━━",
     ]
     footer = (
@@ -127,37 +129,40 @@ def format_market_scan(results: list[MTFResult], limit: int, strong_only: bool =
     body_lines: list[str] = []
 
     if buy_list:
-        body_lines.append("🟢 *3TF ĐỒNG THUẬN MUA:*")
+        body_lines.append("🟢 *4TF ĐỒNG THUẬN MUA:*")
         for r in buy_list:
             b15 = r.tf15.bull if r.tf15 else 0
             b1h = r.tf1h.bull if r.tf1h else 0
             b4h = r.tf4h.bull if r.tf4h else 0
+            b1d = r.tf1d.bull if r.tf1d else 0
             body_lines.append(
                 f"  🚀 `{r.symbol}`  💰{r.price:,.4f}\n"
-                f"      15m:{b15}/5  1H:{b1h}/5  4H:{b4h}/5"
+                f"      15m:{b15}/5  1H:{b1h}/5  4H:{b4h}/5  1D:{b1d}/5"
             )
         body_lines.append("")
 
     if sell_list:
-        body_lines.append("🔴 *3TF ĐỒNG THUẬN BÁN:*")
+        body_lines.append("🔴 *4TF ĐỒNG THUẬN BÁN:*")
         for r in sell_list:
             b15 = r.tf15.bear if r.tf15 else 0
             b1h = r.tf1h.bear if r.tf1h else 0
             b4h = r.tf4h.bear if r.tf4h else 0
+            b1d = r.tf1d.bear if r.tf1d else 0
             body_lines.append(
                 f"  🔻 `{r.symbol}`  💰{r.price:,.4f}\n"
-                f"      15m:{b15}/5  1H:{b1h}/5  4H:{b4h}/5"
+                f"      15m:{b15}/5  1H:{b1h}/5  4H:{b4h}/5  1D:{b1d}/5"
             )
         body_lines.append("")
 
     if not strong_only and partial:
-        body_lines.append("⚪ *Đồng thuận 2/3 TF:*")
-        partial_2 = [r for r in partial if r.align_score == 2]
-        for r in partial_2[:15]:  # chỉ hiện top 15 để không quá dài
+        body_lines.append("⚪ *Đồng thuận 2/3 TF liền kề:*")
+        partial_2 = [r for r in partial if r.align_adjacent_score >= 2]
+        for r in partial_2[:15]:
             s15 = tf_label(r.tf15.bull if r.tf15 else 0, r.tf15.bear if r.tf15 else 0)
             s1h = tf_label(r.tf1h.bull if r.tf1h else 0, r.tf1h.bear if r.tf1h else 0)
             s4h = tf_label(r.tf4h.bull if r.tf4h else 0, r.tf4h.bear if r.tf4h else 0)
-            body_lines.append(f"  • `{r.symbol}` 15m:{s15} 1H:{s1h} 4H:{s4h}")
+            s1d = tf_label(r.tf1d.bull if r.tf1d else 0, r.tf1d.bear if r.tf1d else 0)
+            body_lines.append(f"  • `{r.symbol}` 15m:{s15} 1H:{s1h} 4H:{s4h} 1D:{s1d}")
 
     # Chia thành nhiều message nếu > 3800 ký tự
     messages: list[str] = []
@@ -187,12 +192,14 @@ def format_alert(r: MTFResult) -> str:
     tf15_b = r.tf15.bull if r.tf15 else 0
     tf1h_b = r.tf1h.bull if r.tf1h else 0
     tf4h_b = r.tf4h.bull if r.tf4h else 0
+    tf1d_b = r.tf1d.bull if r.tf1d else 0
 
     return (
         f"{emoji} *ALERT: {r.symbol}*\n"
         f"📍 `{r.price:,.4f}`\n"
-        f"🎯 {sig} — 3TF đồng thuận\n"
+        f"🎯 {sig} — 4TF đồng thuận\n"
         f"15m: {r.tf15.label if r.tf15 else 'N/A'} ({tf15_b}/5)\n"
         f"1H:  {r.tf1h.label if r.tf1h else 'N/A'} ({tf1h_b}/5)\n"
-        f"4H:  {r.tf4h.label if r.tf4h else 'N/A'} ({tf4h_b}/5)"
+        f"4H:  {r.tf4h.label if r.tf4h else 'N/A'} ({tf4h_b}/5)\n"
+        f"1D:  {r.tf1d.label if r.tf1d else 'N/A'} ({tf1d_b}/5)"
     )
