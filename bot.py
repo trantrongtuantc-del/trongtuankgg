@@ -185,7 +185,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = (
         "🚀 *MTF Alignment Bot — V8*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Phân tích đồng thuận 3 khung: *15m | 1H | 4H*\n"
+        "Phân tích đồng thuận 4 khung: *15m | 1H | 4H | 1D*\n"
         "Nhân bản logic Pine Script V8\n\n"
         "👇 *Bàn phím điều khiển đã hiện ở dưới*\n"
         "Hoặc dùng lệnh trực tiếp:\n"
@@ -240,7 +240,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "`/adx 22` — ngưỡng ADX\n\n"
         "*📊 Score /5 mỗi TF:*\n"
         "RSI vùng(1) + ADX+DI(1) + Trên/dưới mây(1) + Cloud dir(1) + TK/KJ(1)\n\n"
-        "*✅ Mạnh = 3TF đều Bull≥4 hoặc Bear≥4*"
+        "*✅ Mạnh = 4TF đều Bull≥4 hoặc Bear≥4*"
     )
     await reply(update, msg)
 
@@ -318,7 +318,7 @@ async def cmd_marketscan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Chọn số lượng coin muốn quét:\n"
         "• *📊 All* — hiện cả đồng thuận 2/3 & 3/3 TF\n"
         "• *🔥 Strong* — chỉ hiện 3TF đồng thuận mạnh\n"
-        "• *🚀 Top 500* — luôn dùng Strong (tránh flood)\n\n"
+        "• *🚀 Top 500* — luôn dùng Strong (4TF, tránh flood)\n\n"
         "⚠️ Top 500 có thể mất *2–4 phút*",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=market_scan_keyboard(),
@@ -401,7 +401,7 @@ async def _run_market_scan(
     if not results:
         no_result = (
             "⚠️ *Không tìm thấy tín hiệu nào.*\n"
-            f"Đã quét {limit} coin — không có đồng thuận 3TF.\n"
+            f"Đã quét {limit} coin — không có đồng thuận 4TF.\n"
             "Thử tắt filter Strong hoặc hạ ADX threshold."
         ) if strong_only else "❌ Không lấy được dữ liệu. Thử lại sau."
 
