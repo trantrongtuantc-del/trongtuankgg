@@ -230,7 +230,7 @@ async def scan_watchlist(watchlist: list[str],
 async def scan_market(
     limit: int = 50,
     exchange_name: str = EXCHANGE,
-    concurrency: int = 10,
+    concurrency: int = 15,   # tăng lên 15 để xử lý 500 token nhanh hơn
     strong_only: bool = False,
 ) -> list[MTFResult]:
     """
